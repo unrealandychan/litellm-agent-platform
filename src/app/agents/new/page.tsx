@@ -2,8 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { ArrowLeft, Check } from "lucide-react";
+import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -153,23 +152,11 @@ export default function NewAgentPage() {
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-8">
-      <div>
-        <Link
-          href="/agents"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" />
-          Back to agents
-        </Link>
-      </div>
-
-      <div className="mt-6">
-        <h1 className="text-[22px] font-semibold tracking-tight">New Agent</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Pick a model, write a system prompt, and attach MCP servers. Sandboxes
-          are created per session — agents themselves are pure definitions.
-        </p>
-      </div>
+      <h1 className="text-[22px] font-semibold tracking-tight">New Agent</h1>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Pick a model, write a system prompt, and attach MCP servers. Sandboxes
+        are created per session — agents themselves are pure definitions.
+      </p>
 
       <Card className="mt-6">
         <CardHeader className="sr-only">
