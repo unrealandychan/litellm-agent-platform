@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw } from "lucide-react";
+import { Play, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,18 +26,15 @@ import {
   AgentRow,
   ApiError,
   SessionRow,
+  TemplateRow,
   getAgent,
-  listSessionsForAgent,
+  listSessions,
+  listTemplates,
+  spawnSession,
 } from "@/lib/api";
 
 interface PageProps {
   params: Promise<{ id: string }>;
-}
-
-function maskKey(raw?: string): string {
-  if (!raw) return "—";
-  if (raw.length <= 8) return raw;
-  return `${raw.slice(0, 6)}…${raw.slice(-4)}`;
 }
 
 function formatTime(iso?: string | null): string {
@@ -53,8 +50,8 @@ function statusVariant(
   status: string,
 ): "default" | "secondary" | "destructive" | "outline" {
   if (status === "ready") return "default";
-  if (status === "provisioning") return "secondary";
-  if (status === "error") return "destructive";
+  if (status === "creating") return "secondary";
+  if (status === "failed") return "destructive";
   return "outline";
 }
 
@@ -63,20 +60,31 @@ export default function AgentDetailPage({ params }: PageProps) {
   const { id } = use(params);
 
   const [agent, setAgent] = useState<AgentRow | null>(null);
+  const [template, setTemplate] = useState<TemplateRow | null>(null);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [spawning, setSpawning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      // Load agent + sessions in parallel; templates separately because the
+      // template lookup is "best effort" — a 5xx on /sandbox-templates
+      // shouldn't break the page.
       const [a, s] = await Promise.all([
         getAgent(id),
-        listSessionsForAgent(id),
+        listSessions(id),
       ]);
       setAgent(a);
-      setSessions(s.data);
+      setSessions(s);
+      try {
+        const templates = await listTemplates();
+        setTemplate(templates.find((t) => t.id === a.template_id) ?? null);
+      } catch {
+        setTemplate(null);
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
       setError(msg);
@@ -89,18 +97,40 @@ export default function AgentDetailPage({ params }: PageProps) {
     void load();
   }, [load]);
 
+  async function handleSpawn() {
+    if (!agent || spawning) return;
+    setSpawning(true);
+    setError(null);
+    try {
+      const session = await spawnSession(agent.id, {});
+      router.push(`/sessions/${session.id}`);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setError(msg);
+      setSpawning(false);
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8">
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
           onClick={() => void load()}
-          disabled={loading}
+          disabled={loading || spawning}
           aria-label="Refresh"
         >
           <RefreshCw className={loading ? "animate-spin" : ""} />
           Refresh
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => void handleSpawn()}
+          disabled={!agent || spawning}
+        >
+          <Play />
+          {spawning ? "Spawning…" : "Spawn session"}
         </Button>
       </div>
 
@@ -110,11 +140,18 @@ export default function AgentDetailPage({ params }: PageProps) {
         </div>
       ) : null}
 
+      {spawning ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Provisioning Fargate task and harness — this typically takes 50–90
+          seconds. Don&rsquo;t leave the page.
+        </div>
+      ) : null}
+
       {agent ? (
         <>
           <div className="mt-6">
             <h1 className="text-[22px] font-semibold tracking-tight">
-              {agent.name}
+              {agent.name ?? agent.id}
             </h1>
             <p className="mt-1 font-mono text-xs text-muted-foreground">
               {agent.id}
@@ -126,7 +163,7 @@ export default function AgentDetailPage({ params }: PageProps) {
               <CardHeader>
                 <CardTitle>Configuration</CardTitle>
                 <CardDescription>
-                  Model, prompt, tools, and credentials.
+                  Model, sandbox template, and branch override.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -134,70 +171,45 @@ export default function AgentDetailPage({ params }: PageProps) {
                   <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
                     Model
                   </div>
-                  <div className="font-mono text-sm">
-                    {agent.config?.model ?? "—"}
-                  </div>
+                  <div className="font-mono text-sm">{agent.model}</div>
                 </div>
 
                 <Separator />
 
                 <div>
                   <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    LiteLLM API key
+                    Sandbox template
                   </div>
-                  <div className="font-mono text-sm">
-                    {maskKey(agent.config?.litellm_api_key)}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    LiteLLM base URL
-                  </div>
-                  <div className="font-mono text-xs break-all">
-                    {agent.config?.litellm_base_url ?? "—"}
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div>
-                  <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    Tools
-                  </div>
-                  {agent.config?.tools && agent.config.tools.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {agent.config.tools.map((tool) => (
-                        <Badge
-                          key={tool}
-                          variant="secondary"
-                          className="font-mono text-[11px]"
-                        >
-                          {tool}
+                  {template ? (
+                    <div className="space-y-1">
+                      <div className="text-sm">
+                        {template.name?.trim() || template.id}
+                        <Badge variant="secondary" className="ml-2 font-mono text-[11px]">
+                          {template.dockerfile_id}
                         </Badge>
-                      ))}
+                      </div>
+                      <div className="font-mono text-xs text-muted-foreground break-all">
+                        {template.repo_url}
+                      </div>
                     </div>
                   ) : (
-                    <div className="text-sm text-muted-foreground">None</div>
+                    <div className="font-mono text-xs text-muted-foreground">
+                      {agent.template_id}
+                    </div>
                   )}
                 </div>
 
-                <Separator />
-
                 <div>
                   <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
-                    System prompt
+                    Branch
                   </div>
-                  <pre className="max-h-72 overflow-auto rounded-md border bg-muted/40 p-3 text-xs whitespace-pre-wrap break-words font-mono">
-                    {agent.config?.system_prompt ?? ""}
-                  </pre>
+                  <div className="font-mono text-sm">{agent.branch}</div>
                 </div>
 
                 <Separator />
 
-                <div className="flex items-center justify-between text-xs tabular-nums text-muted-foreground">
-                  <span>Created {formatTime(agent.created_at)}</span>
-                  <span>Updated {formatTime(agent.updated_at)}</span>
+                <div className="text-xs tabular-nums text-muted-foreground">
+                  Created {formatTime(agent.created_at)}
                 </div>
               </CardContent>
             </Card>
@@ -212,7 +224,7 @@ export default function AgentDetailPage({ params }: PageProps) {
               <CardContent>
                 {sessions.length === 0 ? (
                   <div className="py-8 text-center text-sm text-muted-foreground">
-                    No sessions yet for this agent.
+                    No sessions yet. Click <span className="font-medium">Spawn session</span> to create one.
                   </div>
                 ) : (
                   <Table>

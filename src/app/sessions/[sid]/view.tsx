@@ -11,9 +11,6 @@ import { useParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ChevronDown,
-  ChevronRight,
-  CheckCircle2,
   Folder,
   MoreHorizontal,
   PanelRight,
@@ -23,17 +20,27 @@ import {
   Loader2,
 } from "lucide-react";
 import {
-  buildHeaders,
-  getProxyBase,
-  type AgentRow,
-  type ListResponse,
-  type MessageRow,
-  type SessionRow,
-  type ToolCall,
+  ApiError,
+  AgentRow,
+  HarnessMessageResponse,
+  SessionRow,
+  getAgent,
+  getSession,
+  harnessResponseText,
+  sendMessage,
 } from "@/lib/api";
 
-const POLL_INTERVAL_MS_INFLIGHT = 2000;
-const POLL_INTERVAL_MS_IDLE = 5000;
+type LocalRole = "user" | "assistant";
+
+interface LocalMessage {
+  id: string;
+  role: LocalRole;
+  text: string;
+  status: "in_progress" | "completed" | "failed";
+  error?: string;
+}
+
+const POLL_INTERVAL_MS = 5000;
 const NEAR_BOTTOM_PX = 200;
 
 export default function SessionThreadView() {
@@ -41,133 +48,93 @@ export default function SessionThreadView() {
   const sessionId = params?.sid || "";
 
   const [session, setSession] = useState<SessionRow | null>(null);
-  const [messages, setMessages] = useState<MessageRow[]>([]);
+  const [agent, setAgent] = useState<AgentRow | null>(null);
+  const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState<string>("");
   const [sending, setSending] = useState<boolean>(false);
-  const [aborting, setAborting] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [agentNameById, setAgentNameById] = useState<Record<string, string>>(
-    {},
-  );
-  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const seededFromInitialPromptRef = useRef<boolean>(false);
 
-  // Only ASSISTANT messages count as "in flight". User messages have no
-  // completed_at so they normalize as in_progress, but they're not running
-  // anything — only assistant turns are.
   const hasInProgress = useMemo(
-    () =>
-      messages.some(
-        (m) => m.role === "assistant" && m.status === "in_progress",
-      ),
+    () => messages.some((m) => m.status === "in_progress"),
     [messages],
   );
 
-  const currentModel = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === "assistant" && m.model) return m.model;
-    }
-    return session?.default_model || "";
-  }, [messages, session]);
-
+  const currentModel = agent?.model ?? "";
   const currentAgentName = useMemo(() => {
-    if (session?.agent_name) return session.agent_name;
-    if (session) return agentNameById[session.agent_id] || session.agent_id;
+    if (agent?.name?.trim()) return agent.name.trim();
+    if (session) return session.agent_id;
     return "";
-  }, [session, agentNameById]);
+  }, [session, agent]);
 
-  // Load this session + messages
+  // Append the initial-prompt response (returned by spawn) so the user lands
+  // on a thread that already shows the conversation seed.
+  function seedFromInitialResponse(resp: HarnessMessageResponse | null | undefined) {
+    if (!resp || seededFromInitialPromptRef.current) return;
+    const text = harnessResponseText(resp);
+    if (!text) return;
+    seededFromInitialPromptRef.current = true;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `seed-${Date.now()}`,
+        role: "assistant",
+        text,
+        status: "completed",
+      },
+    ]);
+  }
+
   const loadSession = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
     setError(null);
     try {
-      const proxy = getProxyBase();
-      const headers = buildHeaders();
-      const [sessionRes, messagesRes] = await Promise.all([
-        fetch(`${proxy}/v2/sessions/${sessionId}`, { headers }),
-        fetch(`${proxy}/v2/sessions/${sessionId}/messages`, { headers }),
-      ]);
-
-      if (sessionRes.ok) {
-        setSession(await sessionRes.json());
-      } else {
-        throw new Error(`Failed to fetch session: ${sessionRes.status}`);
-      }
-
-      if (messagesRes.ok) {
-        const m: ListResponse<MessageRow> = await messagesRes.json();
-        setMessages(m.data || []);
+      const s = await getSession(sessionId);
+      setSession(s);
+      seedFromInitialResponse(s.response);
+      try {
+        setAgent(await getAgent(s.agent_id));
+      } catch {
+        setAgent(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
       setLoading(false);
     }
   }, [sessionId]);
 
   useEffect(() => {
-    loadSession();
+    void loadSession();
   }, [loadSession]);
 
-  // Load agents once so the header can resolve agent_id -> agent name when
-  // session.agent_name is absent. The global sidebar handles its own
-  // session/agent polling.
-  useEffect(() => {
-    let cancelled = false;
-    const fetchAgents = async () => {
-      try {
-        const res = await fetch(`${getProxyBase()}/v2/agents?limit=100`, {
-          headers: buildHeaders(),
-        });
-        if (!res.ok || cancelled) return;
-        const data: ListResponse<AgentRow> = await res.json();
-        const map: Record<string, string> = {};
-        for (const a of data.data || []) map[a.id] = a.name;
-        if (!cancelled) setAgentNameById(map);
-      } catch {
-        // silent
-      }
-    };
-    fetchAgents();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Always poll messages (so externally-sent messages appear without reload).
-  // Faster when something is in_progress; slower when idle.
+  // Refresh session status periodically so creating→ready transitions are
+  // visible in the header and the composer enables when the harness is up.
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
-    const fetchMessages = async () => {
+    const tick = async () => {
       try {
-        const res = await fetch(
-          `${getProxyBase()}/v2/sessions/${sessionId}/messages`,
-          { headers: buildHeaders() },
-        );
-        if (!res.ok || cancelled) return;
-        const m: ListResponse<MessageRow> = await res.json();
-        if (!cancelled) setMessages(m.data || []);
+        const s = await getSession(sessionId);
+        if (cancelled) return;
+        setSession(s);
       } catch {
         // silent
       }
     };
-    const intervalMs = hasInProgress
-      ? POLL_INTERVAL_MS_INFLIGHT
-      : POLL_INTERVAL_MS_IDLE;
-    const interval = setInterval(fetchMessages, intervalMs);
+    const id = window.setInterval(tick, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      window.clearInterval(id);
     };
-  }, [sessionId, hasInProgress]);
+  }, [sessionId]);
 
-  // Auto-scroll only when user is already near the bottom; don't hijack scroll
+  // Auto-scroll only when user is already near the bottom.
   const lastMessageCountRef = useRef<number>(0);
   useEffect(() => {
     const c = scrollContainerRef.current;
@@ -188,79 +155,51 @@ export default function SessionThreadView() {
   const handleSend = useCallback(async () => {
     const content = draft.trim();
     if (!content || !sessionId || sending) return;
+    if (session?.status !== "ready") {
+      setError(
+        `Session is not ready yet (status=${session?.status ?? "unknown"}).`,
+      );
+      return;
+    }
     setSending(true);
     setError(null);
 
-    const optimisticId = `optimistic-${Date.now()}`;
-    const optimistic: MessageRow = {
-      id: optimisticId,
-      session_id: sessionId,
-      role: "user",
-      content,
-      status: "in_progress", // queued — server hasn't confirmed yet
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, optimistic]);
-    setPendingMessageId(optimisticId);
+    const userId = `local-${Date.now()}`;
+    const assistantId = `local-${Date.now()}-a`;
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: "user", text: content, status: "completed" },
+      { id: assistantId, role: "assistant", text: "", status: "in_progress" },
+    ]);
     setDraft("");
 
     try {
-      const res = await fetch(
-        `${getProxyBase()}/v2/sessions/${sessionId}/messages`,
-        {
-          method: "POST",
-          headers: buildHeaders(),
-          body: JSON.stringify({ content }),
-        },
+      const resp = await sendMessage(sessionId, { text: content });
+      const text = harnessResponseText(resp) || "(no text in response)";
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, text, status: "completed" }
+            : m,
+        ),
       );
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(`${res.status} ${errText || res.statusText}`);
-      }
-      const refreshed = await fetch(
-        `${getProxyBase()}/v2/sessions/${sessionId}/messages`,
-        { headers: buildHeaders() },
-      );
-      if (refreshed.ok) {
-        const m: ListResponse<MessageRow> = await refreshed.json();
-        setMessages(m.data || []);
-      }
-      setPendingMessageId(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setMessages((prev) => prev.filter((x) => x.id !== optimisticId));
-      setPendingMessageId(null);
+      const msg = e instanceof ApiError ? e.message : (e as Error).message;
+      setError(msg);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, text: msg, status: "failed", error: msg }
+            : m,
+        ),
+      );
     } finally {
       setSending(false);
     }
-  }, [draft, sessionId, sending]);
-
-  const handleAbort = useCallback(async () => {
-    if (!sessionId || aborting) return;
-    setAborting(true);
-    try {
-      await fetch(`${getProxyBase()}/v2/sessions/${sessionId}/abort`, {
-        method: "POST",
-        headers: buildHeaders(),
-      });
-      const refreshed = await fetch(
-        `${getProxyBase()}/v2/sessions/${sessionId}/messages`,
-        { headers: buildHeaders() },
-      );
-      if (refreshed.ok) {
-        const m: ListResponse<MessageRow> = await refreshed.json();
-        setMessages(m.data || []);
-      }
-    } catch {
-      // silent
-    } finally {
-      setAborting(false);
-    }
-  }, [sessionId, aborting]);
+  }, [draft, sessionId, sending, session]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Enter sends (no modifiers). Shift+Enter inserts a newline.
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -268,8 +207,6 @@ export default function SessionThreadView() {
     },
     [handleSend],
   );
-
-  const isQueued = pendingMessageId !== null || sending;
 
   return (
     <div className="sessions-app flex w-full h-full bg-white text-gray-900 overflow-hidden">
@@ -280,17 +217,14 @@ export default function SessionThreadView() {
         loading={loading}
         error={error}
         sending={sending}
-        aborting={aborting}
-        hasInProgress={hasInProgress || isQueued}
+        hasInProgress={hasInProgress}
         currentModel={currentModel}
         draft={draft}
         setDraft={setDraft}
         handleSend={handleSend}
-        handleAbort={handleAbort}
         handleKeyDown={handleKeyDown}
         messagesEndRef={messagesEndRef}
         scrollContainerRef={scrollContainerRef}
-        pendingMessageId={pendingMessageId}
       />
     </div>
   );
@@ -303,21 +237,18 @@ export default function SessionThreadView() {
 interface MainPanelProps {
   session: SessionRow | null;
   agentName: string;
-  messages: MessageRow[];
+  messages: LocalMessage[];
   loading: boolean;
   error: string | null;
   sending: boolean;
-  aborting: boolean;
   hasInProgress: boolean;
   currentModel: string;
   draft: string;
   setDraft: (s: string) => void;
   handleSend: () => void;
-  handleAbort: () => void;
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
-  pendingMessageId: string | null;
 }
 
 function MainPanel({
@@ -327,21 +258,20 @@ function MainPanel({
   loading,
   error,
   sending,
-  aborting,
   hasInProgress,
   currentModel,
   draft,
   setDraft,
   handleSend,
-  handleAbort,
   handleKeyDown,
   messagesEndRef,
   scrollContainerRef,
-  pendingMessageId,
 }: MainPanelProps) {
-  const repoLabel = session?.repos?.[0]?.url
-    ? session.repos[0].url.replace(/^https?:\/\/github\.com\//, "")
-    : "BerriAI/litellm";
+  const sandboxLabel = session?.sandbox_url
+    ? session.sandbox_url.replace(/^https?:\/\//, "")
+    : `session: ${session?.id ?? "—"}`;
+  const statusLabel = session?.status ?? "unknown";
+  const isReady = session?.status === "ready";
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 bg-white overflow-hidden">
@@ -352,10 +282,12 @@ function MainPanel({
             {agentName || "Session"}
           </span>
           <span className="text-gray-300">/</span>
-          <div className="flex items-center gap-1.5 hover:bg-gray-100 px-1.5 py-1 rounded cursor-pointer">
+          <div className="flex items-center gap-1.5 hover:bg-gray-100 px-1.5 py-1 rounded">
             <Folder className="w-3.5 h-3.5 text-gray-400" />
-            <span>{repoLabel}</span>
+            <span title={session?.sandbox_url ?? undefined}>{sandboxLabel}</span>
           </div>
+          <span className="text-gray-300">/</span>
+          <span className="mono text-[11px] text-gray-500">{statusLabel}</span>
         </div>
         <div className="flex items-center gap-2 text-gray-400">
           <button className="p-1.5 hover:bg-gray-100 rounded">
@@ -367,15 +299,21 @@ function MainPanel({
         </div>
       </div>
 
-      {/* Scrollable thread (composer is OUTSIDE this scroll) */}
+      {/* Scrollable thread */}
       <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-[720px] mx-auto w-full py-10 px-6 flex flex-col gap-6">
           {loading && messages.length === 0 && (
             <div className="text-[13px] text-gray-400">Loading…</div>
           )}
-          {!loading && messages.length === 0 && (
+          {!loading && messages.length === 0 && !isReady && (
             <div className="text-[13px] text-gray-400">
-              No messages. Send one below.
+              Sandbox is {statusLabel}. Wait for it to become{" "}
+              <span className="font-mono">ready</span> before sending a message.
+            </div>
+          )}
+          {!loading && messages.length === 0 && isReady && (
+            <div className="text-[13px] text-gray-400">
+              Sandbox is ready. Send a message below.
             </div>
           )}
 
@@ -387,7 +325,6 @@ function MainPanel({
                 m.role === "user" &&
                 messages.slice(0, i).every((x) => x.role !== "user")
               }
-              isPending={m.id === pendingMessageId}
             />
           ))}
 
@@ -403,12 +340,11 @@ function MainPanel({
             draft={draft}
             setDraft={setDraft}
             sending={sending}
-            aborting={aborting}
             hasInProgress={hasInProgress}
             currentModel={currentModel}
             error={error}
+            disabled={!isReady}
             handleSend={handleSend}
-            handleAbort={handleAbort}
             handleKeyDown={handleKeyDown}
           />
         </div>
@@ -420,20 +356,12 @@ function MainPanel({
 function MessageBlock({
   msg,
   isFirstUser,
-  isPending,
 }: {
-  msg: MessageRow;
+  msg: LocalMessage;
   isFirstUser: boolean;
-  isPending: boolean;
 }) {
   if (msg.role === "user") {
-    return (
-      <UserPromptBlock
-        content={msg.content}
-        emphasized={isFirstUser}
-        pending={isPending}
-      />
-    );
+    return <UserPromptBlock content={msg.text} emphasized={isFirstUser} />;
   }
   return <AssistantBlock msg={msg} />;
 }
@@ -441,11 +369,9 @@ function MessageBlock({
 function UserPromptBlock({
   content,
   emphasized,
-  pending,
 }: {
   content: string;
   emphasized: boolean;
-  pending: boolean;
 }) {
   return (
     <div
@@ -454,106 +380,32 @@ function UserPromptBlock({
       }`}
     >
       {content}
-      {pending && (
-        <div className="mt-3 flex items-center gap-1.5 text-[11px] text-gray-400 mono">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          <span>queued</span>
-        </div>
-      )}
     </div>
   );
 }
 
-function AssistantBlock({ msg }: { msg: MessageRow }) {
+function AssistantBlock({ msg }: { msg: LocalMessage }) {
   const failed = msg.status === "failed";
   const inProgress = msg.status === "in_progress";
 
   return (
     <div className="flex flex-col gap-3">
-      {msg.content ? (
+      {msg.text ? (
         <div
           className="sessions-md text-[14px] text-gray-800 leading-relaxed"
           style={{ color: failed ? "#b91c1c" : undefined }}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {msg.content}
-          </ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
         </div>
       ) : inProgress ? (
-        <div className="text-[14px] text-gray-400 leading-relaxed">
+        <div className="flex items-center gap-2 text-[14px] text-gray-400 leading-relaxed">
+          <Loader2 className="w-3 h-3 animate-spin" />
           thinking…
         </div>
       ) : null}
 
-      {failed && msg.error_reason && (
-        <div className="mono text-[11px] text-red-700">{msg.error_reason}</div>
-      )}
-
-      {msg.tools && msg.tools.length > 0 && (
-        <div className="flex flex-col gap-2">
-          {msg.tools.map((t, i) => (
-            <ToolResultCard key={i} tool={t} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ToolResultCard({ tool }: { tool: ToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-  const inputStr =
-    tool.input === undefined || tool.input === null
-      ? ""
-      : typeof tool.input === "string"
-        ? tool.input
-        : JSON.stringify(tool.input, null, 2);
-  const succeeded = !!tool.output;
-
-  return (
-    <div>
-      <div
-        onClick={() => setExpanded((e) => !e)}
-        className="border border-gray-200 rounded-xl p-4 flex items-center gap-4 bg-[#fcfcfc] shadow-sm cursor-pointer hover:bg-gray-50 transition-colors"
-      >
-        <div
-          className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-            succeeded
-              ? "bg-emerald-50 border border-emerald-100"
-              : "bg-amber-50 border border-amber-100"
-          }`}
-        >
-          <CheckCircle2
-            className={`w-5 h-5 ${succeeded ? "text-emerald-500" : "text-amber-500"}`}
-          />
-        </div>
-        <div className="flex flex-col flex-1 min-w-0">
-          <span className="text-[14px] font-medium text-gray-800">
-            {tool.name}
-          </span>
-          <span className="text-[12px] text-gray-500 truncate">
-            {succeeded ? "Completed" : "Pending"}
-          </span>
-        </div>
-        {expanded ? (
-          <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
-        ) : (
-          <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-        )}
-      </div>
-      {expanded && (
-        <div className="mt-2 border border-gray-200 rounded-lg bg-[#fcfcfc] overflow-hidden">
-          {inputStr && (
-            <pre className="m-0 p-3 mono text-[12px] text-gray-600 whitespace-pre-wrap break-words border-b border-gray-200 max-h-60 overflow-auto">
-              {inputStr}
-            </pre>
-          )}
-          {tool.output && (
-            <pre className="m-0 p-3 mono text-[12px] text-gray-800 whitespace-pre-wrap break-words max-h-60 overflow-auto">
-              {tool.output}
-            </pre>
-          )}
-        </div>
+      {failed && msg.error && (
+        <div className="mono text-[11px] text-red-700">{msg.error}</div>
       )}
     </div>
   );
@@ -567,12 +419,11 @@ interface ComposerProps {
   draft: string;
   setDraft: (s: string) => void;
   sending: boolean;
-  aborting: boolean;
   hasInProgress: boolean;
   currentModel: string;
   error: string | null;
+  disabled: boolean;
   handleSend: () => void;
-  handleAbort: () => void;
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 }
 
@@ -580,15 +431,17 @@ function Composer({
   draft,
   setDraft,
   sending,
-  aborting,
   hasInProgress,
   currentModel,
   error,
+  disabled,
   handleSend,
-  handleAbort,
   handleKeyDown,
 }: ComposerProps) {
-  const canSend = draft.trim().length > 0 && !sending;
+  const canSend = draft.trim().length > 0 && !sending && !disabled;
+  const placeholder = disabled
+    ? "Sandbox not ready yet…"
+    : "Add a follow up";
 
   return (
     <div className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden focus-within:ring-1 focus-within:ring-gray-300 focus-within:border-gray-300 transition-all">
@@ -596,8 +449,8 @@ function Composer({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Add a follow up"
-        disabled={sending}
+        placeholder={placeholder}
+        disabled={sending || disabled}
         rows={1}
         className="w-full p-4 outline-none resize-none text-[15px] placeholder:text-gray-400 bg-transparent"
       />
@@ -614,17 +467,17 @@ function Composer({
             type="button"
             className="hover:text-gray-700 transition-colors"
             aria-label="Attach"
+            disabled
           >
             <ImageIcon className="w-4 h-4" />
           </button>
           {hasInProgress ? (
             <button
               type="button"
-              onClick={handleAbort}
-              disabled={aborting}
-              className="bg-black text-white p-1.5 rounded-full hover:bg-gray-800 transition-colors disabled:opacity-50"
-              aria-label="Stop"
-              title="Stop"
+              disabled
+              className="bg-black text-white p-1.5 rounded-full opacity-50"
+              aria-label="Stop (not supported)"
+              title="Abort is not supported on this proxy yet"
             >
               <Square className="w-3 h-3 fill-current" />
             </button>

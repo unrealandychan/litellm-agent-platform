@@ -30,13 +30,11 @@ function statusDotClass(status: string): string {
   switch (status) {
     case "ready":
       return "bg-emerald-500";
-    case "provisioning":
-    case "pending":
+    case "creating":
       return "bg-amber-500";
-    case "error":
     case "failed":
       return "bg-red-500";
-    case "terminated":
+    case "dead":
       return "bg-muted-foreground";
     default:
       return "bg-muted-foreground";
@@ -48,7 +46,7 @@ function truncateId(id: string): string {
   return `${id.slice(0, ID_TRUNCATE_LIMIT)}…`;
 }
 
-function formatRelative(iso: string): string {
+function formatRelative(iso?: string | null): string {
   if (!iso) return "—";
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return iso;
@@ -80,11 +78,11 @@ export default function SessionsListPage() {
     setError(null);
     try {
       const [sessionsRes, agentsRes] = await Promise.all([
-        listSessions(100),
+        listSessions(),
         listAgents(),
       ]);
-      setSessions(sessionsRes.data);
-      setAgents(agentsRes.data);
+      setSessions(sessionsRes);
+      setAgents(agentsRes);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : (e as Error).message;
       setError(msg);
@@ -106,7 +104,7 @@ export default function SessionsListPage() {
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agents) {
-      map.set(a.id, a.name);
+      map.set(a.id, a.name ?? a.id);
     }
     return map;
   }, [agents]);
@@ -115,8 +113,7 @@ export default function SessionsListPage() {
     const seen = new Map<string, string>();
     for (const s of sessions) {
       if (seen.has(s.agent_id)) continue;
-      const name =
-        agentNameById.get(s.agent_id) ?? s.agent_name ?? s.agent_id;
+      const name = agentNameById.get(s.agent_id) ?? s.agent_id;
       seen.set(s.agent_id, name);
     }
     return Array.from(seen, ([id, name]) => ({ id, name })).sort((a, b) =>
@@ -205,14 +202,14 @@ export default function SessionsListPage() {
                   className="h-24 text-center text-sm text-muted-foreground"
                 >
                   {sessions.length === 0
-                    ? "No sessions yet. Create an agent and start a session to see it here."
+                    ? "No sessions yet. Open an agent and click Spawn session to create one."
                     : "No sessions match this filter."}
                 </TableCell>
               </TableRow>
             ) : (
               filteredSessions.map((s) => {
                 const agentName =
-                  agentNameById.get(s.agent_id) ?? s.agent_name ?? s.agent_id;
+                  agentNameById.get(s.agent_id) ?? s.agent_id;
                 return (
                   <TableRow
                     key={s.id}
@@ -245,8 +242,13 @@ export default function SessionsListPage() {
                       </button>
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
-                      {s.sandbox?.type ?? "—"}
-                      {s.sandbox?.size ? ` · ${s.sandbox.size}` : ""}
+                      {s.sandbox_url ? (
+                        <span title={s.sandbox_url}>
+                          {s.sandbox_url.replace(/^https?:\/\//, "")}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell className="tabular-nums text-sm text-muted-foreground">
                       {formatRelative(s.created_at)}

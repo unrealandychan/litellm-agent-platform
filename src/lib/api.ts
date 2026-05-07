@@ -1,11 +1,21 @@
 /**
- * Shared API helpers for talking to a LiteLLM proxy.
+ * Shared API helpers for talking to a LiteLLM proxy's managed_agents endpoints.
+ *
+ * Endpoints used (all under /v1/managed_agents):
+ *   GET    /dockerfiles                              — list configured harnesses
+ *   GET    /sandbox-templates                        — list templates
+ *   GET    /agents                                   — list agents
+ *   GET    /agents/{id}                              — one agent
+ *   POST   /agents                                   — create agent
+ *   POST   /agents/{id}/session                      — spawn session (slow ~50-90s)
+ *   GET    /sessions                                 — list sessions, optional ?agent_id
+ *   GET    /sessions/{id}                            — one session
+ *   DELETE /sessions/{id}                            — terminate session
+ *   POST   /sessions/{id}/message                    — passthrough chat message
  *
  * Resolution order:
  *   - Base URL: localStorage("LITELLM_PROXY_URL") || NEXT_PUBLIC_LITELLM_BASE_URL || "http://localhost:4000"
- *   - API key:  localStorage("LITELLM_API_KEY")   || NEXT_PUBLIC_LITELLM_API_KEY    || "sk-1234"
- *
- * localStorage takes precedence so a dev can override per-browser without rebuilding.
+ *   - API key:  localStorage("LITELLM_API_KEY")   || NEXT_PUBLIC_LITELLM_API_KEY   || "sk-1234"
  */
 
 const FALLBACK_PROXY = "http://localhost:4000";
@@ -34,75 +44,95 @@ export function buildHeaders(): HeadersInit {
   };
 }
 
-export interface ListResponse<T> {
-  data: T[];
-  next_cursor: string | null;
-  has_more: boolean;
-}
+// ---------- Types ----------
 
-export type MessageStatus = "in_progress" | "completed" | "failed";
-export type MessageRole = "user" | "assistant";
+export type SessionStatus =
+  | "creating"
+  | "ready"
+  | "failed"
+  | "dead"
+  | string;
 
-export interface ToolCall {
-  name: string;
-  input?: unknown;
-  output?: string;
-}
+export type TemplateBuildStatus =
+  | "pending"
+  | "ready"
+  | "failed"
+  | string;
 
-export interface MessageRow {
+export interface DockerfileRow {
   id: string;
-  session_id: string;
-  role: MessageRole;
-  content: string;
-  status: MessageStatus;
-  created_at: string;
-  completed_at?: string;
-  tools?: ToolCall[];
-  model?: string;
-  error_reason?: string;
+  container_port: number;
 }
 
-export interface SandboxSpec {
-  type: string;
-  size: string;
-  timeout_minutes?: number;
-  idle_timeout_minutes?: number;
+export interface TemplateRow {
+  id: string;
+  name?: string | null;
+  dockerfile_id: string;
+  container_port: number;
+  repo_url: string;
+  default_branch: string;
+  visibility: string;
+  image_uri?: string | null;
+  task_def_arn?: string | null;
+  build_status: TemplateBuildStatus;
+  build_error?: string | null;
 }
 
-export interface RepoSpec {
-  url: string;
-  starting_ref: string;
-  checked_out_sha?: string;
+export interface AgentRow {
+  id: string;
+  name?: string | null;
+  model: string;
+  template_id: string;
+  branch: string;
+  created_at?: string | null;
 }
 
 export interface SessionRow {
   id: string;
   agent_id: string;
-  agent_name?: string;
-  sandbox: SandboxSpec;
-  status: string;
-  repos: RepoSpec[];
-  created_by: string;
-  created_at: string;
-  terminated_at: string | null;
-  default_model?: string;
+  sandbox_url?: string | null;
+  status: SessionStatus;
+  task_arn?: string | null;
+  response?: HarnessMessageResponse | null;
+  created_at?: string | null;
 }
 
-export interface AgentConfig {
-  model: string;
-  system_prompt: string;
-  tools: string[];
-  litellm_api_key: string;
-  litellm_base_url: string;
+/**
+ * Shape returned by the harness when we POST a message. Stored on
+ * `SessionRow.response` after a `POST /agents/{id}/session` with an
+ * `initial_prompt`, and returned directly from `POST /sessions/{id}/message`.
+ *
+ * Modeled loosely on opencode's response — the proxy passes it through
+ * verbatim, so we keep this permissive.
+ */
+export interface HarnessMessagePart {
+  type: string;
+  text?: string;
+  [key: string]: unknown;
 }
 
-export interface AgentRow {
+export interface HarnessMessageResponse {
+  parts?: HarnessMessagePart[];
+  [key: string]: unknown;
+}
+
+// ---------- Models / MCP (other proxy endpoints, unchanged) ----------
+
+export interface ModelRow {
   id: string;
-  name: string;
-  config?: AgentConfig;
-  created_by?: string;
-  created_at?: string;
-  updated_at?: string;
+  object?: string;
+  owned_by?: string;
+  created?: number;
+}
+
+export interface McpRow {
+  server_id: string;
+  server_name?: string;
+  alias?: string;
+  description?: string;
+  url?: string;
+  transport?: string;
+  status?: string;
 }
 
 // ---------- Errors ----------
@@ -154,11 +184,16 @@ function extractErrorMessage(detail: unknown, status: number): string {
 export const PROXY_BASE: string =
   process.env.NEXT_PUBLIC_LITELLM_BASE_URL || FALLBACK_PROXY;
 
+export interface ApiInit {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
 export async function api<T>(
   method: string,
   path: string,
   body?: unknown,
-  init?: { headers?: Record<string, string> },
+  init?: ApiInit,
 ): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${getApiKey()}`,
@@ -172,6 +207,7 @@ export async function api<T>(
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: init?.signal,
   });
 
   const text = await res.text();
@@ -199,63 +235,110 @@ export async function api<T>(
   return parsed as T;
 }
 
-// ---------- Endpoints ----------
+// ---------- Templates / dockerfiles ----------
 
-export interface CreateAgentRequest {
-  name: string;
-  config: AgentConfig;
+export function listDockerfiles(): Promise<DockerfileRow[]> {
+  return api<DockerfileRow[]>("GET", "/v1/managed_agents/dockerfiles");
 }
 
-export function listAgents(): Promise<ListResponse<AgentRow>> {
-  return api<ListResponse<AgentRow>>("GET", "/v2/agents");
+export function listTemplates(): Promise<TemplateRow[]> {
+  return api<TemplateRow[]>("GET", "/v1/managed_agents/sandbox-templates");
+}
+
+// ---------- Agents ----------
+
+export interface CreateAgentRequest {
+  name?: string;
+  model: string;
+  prompt?: string;
+  tools?: unknown[];
+  template_id: string;
+  branch?: string;
+  litellm_api_key?: string;
+  litellm_api_base?: string;
+}
+
+export function listAgents(): Promise<AgentRow[]> {
+  return api<AgentRow[]>("GET", "/v1/managed_agents/agents");
 }
 
 export function getAgent(id: string): Promise<AgentRow> {
-  return api<AgentRow>("GET", `/v2/agents/${encodeURIComponent(id)}`);
+  return api<AgentRow>(
+    "GET",
+    `/v1/managed_agents/agents/${encodeURIComponent(id)}`,
+  );
 }
 
 export function createAgent(req: CreateAgentRequest): Promise<AgentRow> {
-  return api<AgentRow>("POST", "/v2/agents", req);
+  return api<AgentRow>("POST", "/v1/managed_agents/agents", req);
 }
 
-export function listSessions(
-  limit = 100,
-): Promise<ListResponse<SessionRow>> {
-  return api<ListResponse<SessionRow>>("GET", `/v2/sessions?limit=${limit}`);
-}
+// ---------- Sessions ----------
 
 export interface CreateSessionRequest {
-  agent_id: string;
-  sandbox: SandboxSpec;
-  repos: RepoSpec[];
-  env_vars?: Record<string, string>;
+  initial_prompt?: string;
+  title?: string;
 }
 
-export function createSession(req: CreateSessionRequest): Promise<SessionRow> {
-  return api<SessionRow>("POST", "/v2/sessions", req);
+export function listSessions(agentId?: string): Promise<SessionRow[]> {
+  const qs = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return api<SessionRow[]>("GET", `/v1/managed_agents/sessions${qs}`);
 }
 
-export function listSessionsForAgent(
-  agentId: string,
-): Promise<ListResponse<SessionRow>> {
-  return api<ListResponse<SessionRow>>(
+export function getSession(id: string): Promise<SessionRow> {
+  return api<SessionRow>(
     "GET",
-    `/v2/agents/${encodeURIComponent(agentId)}/sessions`,
+    `/v1/managed_agents/sessions/${encodeURIComponent(id)}`,
+  );
+}
+
+/**
+ * Spawn a session for an agent. This is the slowest call in the system —
+ * 50–90s typical. Pass an AbortSignal to cancel in-flight requests on
+ * navigation. The proxy provisions a Fargate task, waits for the harness to
+ * come up, and (optionally) seeds the conversation with `initial_prompt`.
+ */
+export function spawnSession(
+  agentId: string,
+  req: CreateSessionRequest,
+  init?: ApiInit,
+): Promise<SessionRow> {
+  return api<SessionRow>(
+    "POST",
+    `/v1/managed_agents/agents/${encodeURIComponent(agentId)}/session`,
+    req,
+    init,
+  );
+}
+
+export function deleteSession(id: string): Promise<{ id: string; status: string }> {
+  return api<{ id: string; status: string }>(
+    "DELETE",
+    `/v1/managed_agents/sessions/${encodeURIComponent(id)}`,
+  );
+}
+
+// ---------- Session messages (passthrough to harness) ----------
+
+export interface SendMessageRequest {
+  text?: string;
+  parts?: HarnessMessagePart[];
+}
+
+export function sendMessage(
+  sessionId: string,
+  req: SendMessageRequest,
+  init?: ApiInit,
+): Promise<HarnessMessageResponse> {
+  return api<HarnessMessageResponse>(
+    "POST",
+    `/v1/managed_agents/sessions/${encodeURIComponent(sessionId)}/message`,
+    req,
+    init,
   );
 }
 
 // ---------- Models ----------
-
-/**
- * Shape of a row returned by the OpenAI-compatible `GET /v1/models` endpoint.
- * The proxy returns `{ data: ModelRow[] }`. Only `id` is guaranteed.
- */
-export interface ModelRow {
-  id: string;
-  object?: string;
-  owned_by?: string;
-  created?: number;
-}
 
 interface OpenAIModelListResponse {
   data: ModelRow[];
@@ -280,55 +363,31 @@ export async function listModels(): Promise<ModelRow[]> {
   if (!isRecord(raw)) return [];
   const data = raw.data;
   if (!Array.isArray(data)) return [];
-  const seen = new Set<string>();
   const rows: ModelRow[] = [];
   for (const item of data) {
     const parsed = parseModelRow(item);
-    if (!parsed) continue;
-    if (seen.has(parsed.id)) continue;
-    seen.add(parsed.id);
-    rows.push(parsed);
-  }
-  return rows;
-}
-
-// ---------- MCP servers ----------
-
-/**
- * Shape of a row returned by `GET /v1/mcp/server`. The proxy returns
- * `List[LiteLLM_MCPServerTable]` directly (no wrapper). Many fields may be
- * absent — only `server_id` is guaranteed.
- */
-export interface McpRow {
-  server_id: string;
-  server_name?: string;
-  alias?: string;
-  description?: string;
-  url?: string;
-  transport?: string;
-  status?: string;
-}
-
-function parseMcpRow(value: unknown): McpRow | null {
-  if (!isRecord(value)) return null;
-  if (typeof value.server_id !== "string") return null;
-  const row: McpRow = { server_id: value.server_id };
-  if (typeof value.server_name === "string") row.server_name = value.server_name;
-  if (typeof value.alias === "string") row.alias = value.alias;
-  if (typeof value.description === "string") row.description = value.description;
-  if (typeof value.url === "string") row.url = value.url;
-  if (typeof value.transport === "string") row.transport = value.transport;
-  if (typeof value.status === "string") row.status = value.status;
-  return row;
-}
-
-export async function listMcps(): Promise<McpRow[]> {
-  const raw = await api<unknown>("GET", "/v1/mcp/server");
-  if (!Array.isArray(raw)) return [];
-  const rows: McpRow[] = [];
-  for (const item of raw) {
-    const parsed = parseMcpRow(item);
     if (parsed) rows.push(parsed);
   }
   return rows;
+}
+
+// ---------- Harness response helpers ----------
+
+/**
+ * Best-effort flatten of the harness message response into a single string.
+ * Used by the session thread view to display assistant turns without binding
+ * to a specific harness's exact part shape.
+ */
+export function harnessResponseText(
+  resp: HarnessMessageResponse | null | undefined,
+): string {
+  if (!resp) return "";
+  const parts = Array.isArray(resp.parts) ? resp.parts : [];
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p && typeof p === "object" && typeof p.text === "string") {
+      out.push(p.text);
+    }
+  }
+  return out.join("");
 }

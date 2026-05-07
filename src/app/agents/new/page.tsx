@@ -17,21 +17,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   ApiError,
-  McpRow,
   ModelRow,
-  PROXY_BASE,
+  TemplateRow,
   createAgent,
-  listMcps,
   listModels,
+  listTemplates,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
-const DEFAULT_KEY = "sk-1234";
 const NAME_MAX = 64;
 
-function mcpLabel(row: McpRow): string {
-  return row.alias ?? row.server_name ?? row.server_id;
+function templateLabel(t: TemplateRow): string {
+  return t.name?.trim() || t.id;
 }
 
 export default function NewAgentPage() {
@@ -41,12 +39,11 @@ export default function NewAgentPage() {
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [modelQuery, setModelQuery] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [selectedMcps, setSelectedMcps] = useState<Set<string>>(new Set());
-  const [apiKey, setApiKey] = useState(DEFAULT_KEY);
-  const [baseUrl, setBaseUrl] = useState(PROXY_BASE);
+  const [templateId, setTemplateId] = useState("");
+  const [branchOverride, setBranchOverride] = useState("");
 
   const [models, setModels] = useState<ModelRow[]>([]);
-  const [mcps, setMcps] = useState<McpRow[]>([]);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [metaError, setMetaError] = useState<string | null>(null);
 
@@ -58,13 +55,16 @@ export default function NewAgentPage() {
     async function load() {
       setMetaError(null);
       try {
-        const [modelsRes, mcpsRes] = await Promise.all([
+        const [modelsRes, templatesRes] = await Promise.all([
           listModels().catch(() => [] as ModelRow[]),
-          listMcps().catch(() => [] as McpRow[]),
+          listTemplates().catch(() => [] as TemplateRow[]),
         ]);
         if (cancelled) return;
         setModels(modelsRes);
-        setMcps(mcpsRes);
+        setTemplates(templatesRes);
+        // Auto-select the first ready template.
+        const ready = templatesRes.find((t) => t.build_status === "ready");
+        if (ready) setTemplateId(ready.id);
       } catch (e) {
         if (cancelled) return;
         setMetaError(
@@ -89,33 +89,26 @@ export default function NewAgentPage() {
     if (!q) return sortedModels;
     return sortedModels.filter((m) => m.id.toLowerCase().includes(q));
   }, [sortedModels, modelQuery]);
-  const sortedMcps = useMemo(
-    () =>
-      [...mcps].sort((a, b) =>
-        mcpLabel(a).localeCompare(mcpLabel(b)),
-      ),
-    [mcps],
-  );
 
-  function toggleMcp(id: string) {
-    setSelectedMcps((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const sortedTemplates = useMemo(
+    () =>
+      [...templates].sort((a, b) =>
+        templateLabel(a).localeCompare(templateLabel(b)),
+      ),
+    [templates],
+  );
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => t.id === templateId) ?? null,
+    [templates, templateId],
+  );
 
   function validate(): string | null {
     const trimmedName = name.trim();
-    if (!trimmedName) return "Name is required.";
     if (trimmedName.length > NAME_MAX) {
       return `Name must be ${NAME_MAX} characters or fewer.`;
     }
     if (!model.trim()) return "Model is required.";
-    if (!systemPrompt.trim()) return "System prompt is required.";
-    if (!apiKey.trim()) return "LiteLLM API key is required.";
-    if (!baseUrl.trim()) return "LiteLLM base URL is required.";
+    if (!templateId) return "Sandbox template is required.";
     return null;
   }
 
@@ -132,14 +125,11 @@ export default function NewAgentPage() {
     setSubmitting(true);
     try {
       const created = await createAgent({
-        name: name.trim(),
-        config: {
-          model: model.trim(),
-          system_prompt: systemPrompt,
-          tools: Array.from(selectedMcps),
-          litellm_api_key: apiKey.trim(),
-          litellm_base_url: baseUrl.trim(),
-        },
+        name: name.trim() || undefined,
+        model: model.trim(),
+        prompt: systemPrompt.trim() || undefined,
+        template_id: templateId,
+        branch: branchOverride.trim() || undefined,
       });
       router.push(`/agents/${created.id}`);
     } catch (err) {
@@ -153,21 +143,21 @@ export default function NewAgentPage() {
     <div className="mx-auto w-full max-w-2xl px-6 py-8">
       <h1 className="text-[22px] font-semibold tracking-tight">New Agent</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Pick a model, write a system prompt, and attach MCP servers. Sandboxes
-        are created per session — agents themselves are pure definitions.
+        Pick a sandbox template (harness + repo), a model, and a system prompt.
+        Sessions are spawned per-agent — each run gets its own Fargate task.
       </p>
 
       <Card className="mt-6">
         <CardHeader className="sr-only">
           <CardTitle>New Agent</CardTitle>
           <CardDescription>
-            Pick a model, write a system prompt, and attach MCP servers.
+            Pick a sandbox template, model, and system prompt.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-5" onSubmit={onSubmit} noValidate>
             <div className="space-y-1.5">
-              <Label htmlFor="name">Name</Label>
+              <Label htmlFor="name">Name (optional)</Label>
               <Input
                 id="name"
                 value={name}
@@ -176,6 +166,103 @@ export default function NewAgentPage() {
                 placeholder="code-reviewer"
                 disabled={submitting}
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Sandbox template</Label>
+              {loadingMeta ? (
+                <p className="text-xs text-muted-foreground">
+                  Loading templates from proxy…
+                </p>
+              ) : sortedTemplates.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No sandbox templates configured. An admin must create one
+                  first via{" "}
+                  <span className="font-mono">
+                    POST /v1/managed_agents/sandbox-templates
+                  </span>
+                  .
+                </p>
+              ) : (
+                <div className="rounded-lg border bg-card">
+                  <ul role="listbox" aria-label="Sandbox templates" className="divide-y">
+                    {sortedTemplates.map((t) => {
+                      const selected = t.id === templateId;
+                      const ready = t.build_status === "ready";
+                      return (
+                        <li key={t.id}>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => setTemplateId(t.id)}
+                            disabled={submitting || !ready}
+                            className={cn(
+                              "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
+                              selected && "bg-accent/30",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "grid size-4 shrink-0 place-items-center rounded-full border transition-colors",
+                                selected
+                                  ? "border-foreground bg-foreground text-background"
+                                  : "border-border bg-transparent",
+                              )}
+                              aria-hidden
+                            >
+                              {selected ? <Check className="size-3" /> : null}
+                            </span>
+                            <span className="flex min-w-0 flex-1 flex-col">
+                              <span className="flex items-center gap-2 truncate text-[13px] text-foreground">
+                                <span>{templateLabel(t)}</span>
+                                <span className="rounded-md border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                                  {t.dockerfile_id}
+                                </span>
+                              </span>
+                              <span className="truncate font-mono text-[11px] text-muted-foreground">
+                                {t.repo_url} · {t.default_branch}
+                              </span>
+                            </span>
+                            <span
+                              className={cn(
+                                "shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide",
+                                ready
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : t.build_status === "failed"
+                                    ? "bg-red-50 text-red-700"
+                                    : "bg-amber-50 text-amber-700",
+                              )}
+                            >
+                              {t.build_status}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="branch">Branch override (optional)</Label>
+              <Input
+                id="branch"
+                value={branchOverride}
+                onChange={(e) => setBranchOverride(e.target.value)}
+                placeholder={
+                  selectedTemplate
+                    ? `default: ${selectedTemplate.default_branch}`
+                    : "default: main"
+                }
+                disabled={submitting}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                Pin this agent to a specific branch of the template&rsquo;s
+                repo. Leave blank to use the template default.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -277,7 +364,7 @@ export default function NewAgentPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="system-prompt">System prompt</Label>
+              <Label htmlFor="system-prompt">System prompt (optional)</Label>
               <Textarea
                 id="system-prompt"
                 value={systemPrompt}
@@ -288,104 +375,14 @@ export default function NewAgentPage() {
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label>MCP servers</Label>
-              {loadingMeta ? (
-                <p className="text-xs text-muted-foreground">
-                  Loading MCP servers from proxy…
-                </p>
-              ) : sortedMcps.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No MCP servers configured on this proxy.
-                </p>
-              ) : (
-                <div className="rounded-lg border bg-card">
-                  <ul role="listbox" aria-label="MCP servers" className="divide-y">
-                    {sortedMcps.map((m) => {
-                      const selected = selectedMcps.has(m.server_id);
-                      return (
-                        <li key={m.server_id}>
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            onClick={() => toggleMcp(m.server_id)}
-                            disabled={submitting}
-                            className={cn(
-                              "flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                              selected && "bg-accent/30",
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                "grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
-                                selected
-                                  ? "border-foreground bg-foreground text-background"
-                                  : "border-border bg-transparent",
-                              )}
-                              aria-hidden
-                            >
-                              {selected ? <Check className="size-3" /> : null}
-                            </span>
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate text-[13px] text-foreground">
-                                {mcpLabel(m)}
-                              </span>
-                              {m.url ? (
-                                <span className="truncate font-mono text-[11px] text-muted-foreground">
-                                  {m.url}
-                                </span>
-                              ) : null}
-                            </span>
-                            {m.transport ? (
-                              <span className="shrink-0 rounded-md border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                                {m.transport}
-                              </span>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-              {selectedMcps.size > 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  {selectedMcps.size} selected.
-                </p>
-              ) : null}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="api-key">LiteLLM API key</Label>
-              <Input
-                id="api-key"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                disabled={submitting}
-                className="font-mono text-xs"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="base-url">LiteLLM base URL</Label>
-              <Input
-                id="base-url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                disabled={submitting}
-                className="font-mono text-xs"
-              />
-            </div>
-
             {metaError ? (
               <p className="font-mono text-xs text-muted-foreground">
-                Could not load model/MCP lists: {metaError}
+                Could not load template/model lists: {metaError}
               </p>
             ) : null}
 
             <div className="pt-2">
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" disabled={submitting || !templateId}>
                 {submitting ? "Creating…" : "Create agent"}
               </Button>
               {error ? (

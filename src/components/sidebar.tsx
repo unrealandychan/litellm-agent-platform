@@ -22,13 +22,11 @@ function statusDotClass(status: string): string {
   switch (status) {
     case "ready":
       return "bg-emerald-500";
-    case "provisioning":
-    case "pending":
+    case "creating":
       return "bg-amber-500";
-    case "error":
     case "failed":
       return "bg-red-500";
-    case "terminated":
+    case "dead":
       return "bg-muted-foreground";
     default:
       return "bg-muted-foreground";
@@ -38,6 +36,10 @@ function statusDotClass(status: string): string {
 function shortId(id: string): string {
   if (id.length <= 14) return id;
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
+}
+
+function agentLabel(a: AgentRow): string {
+  return a.name?.trim() || a.id;
 }
 
 export function Sidebar() {
@@ -52,11 +54,11 @@ export function Sidebar() {
       try {
         const [a, s] = await Promise.all([
           listAgents().catch(() => null),
-          listSessions(RECENT_SESSION_LIMIT).catch(() => null),
+          listSessions().catch(() => null),
         ]);
         if (cancelled) return;
-        if (a) setAgents(a.data);
-        if (s) setSessions(s.data);
+        if (a) setAgents(a);
+        if (s) setSessions(s);
       } catch {
         // silent — sidebar shouldn't crash on transient proxy errors
       }
@@ -72,24 +74,25 @@ export function Sidebar() {
   }, []);
 
   const sortedAgents = useMemo(
-    () => [...agents].sort((a, b) => a.name.localeCompare(b.name)),
+    () => [...agents].sort((a, b) => agentLabel(a).localeCompare(agentLabel(b))),
     [agents],
   );
 
   const recentSessions = useMemo(
     () =>
       [...sessions]
-        .sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-        )
+        .sort((a, b) => {
+          const at = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const bt = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return bt - at;
+        })
         .slice(0, RECENT_SESSION_LIMIT),
     [sessions],
   );
 
   const agentNameById = useMemo(() => {
     const m = new Map<string, string>();
-    for (const a of agents) m.set(a.id, a.name);
+    for (const a of agents) m.set(a.id, agentLabel(a));
     return m;
   }, [agents]);
 
@@ -178,6 +181,7 @@ export function Sidebar() {
             sortedAgents.map((a) => {
               const href = `/agents/${a.id}`;
               const active = pathname === href;
+              const label = agentLabel(a);
               return (
                 <li key={a.id}>
                   <Link
@@ -189,13 +193,13 @@ export function Sidebar() {
                         ? "bg-sidebar-accent text-foreground"
                         : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
                     )}
-                    title={a.name}
+                    title={label}
                   >
                     <span
                       aria-hidden
                       className="size-1.5 shrink-0 rounded-full bg-muted-foreground/60"
                     />
-                    <span className="truncate">{a.name}</span>
+                    <span className="truncate">{label}</span>
                   </Link>
                 </li>
               );
@@ -219,8 +223,7 @@ export function Sidebar() {
             recentSessions.map((s) => {
               const href = `/sessions/${s.id}`;
               const active = pathname === href;
-              const agentName =
-                agentNameById.get(s.agent_id) ?? s.agent_name ?? null;
+              const agentName = agentNameById.get(s.agent_id);
               return (
                 <li key={s.id}>
                   <Link
@@ -316,4 +319,3 @@ function SectionHeader({ label, count, href, active }: SectionHeaderProps) {
     </div>
   );
 }
-

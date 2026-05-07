@@ -27,7 +27,7 @@ interface RowState {
   active: boolean;
 }
 
-function formatCreated(iso?: string): string {
+function formatCreated(iso?: string | null): string {
   if (!iso) return "—";
   try {
     return new Date(iso).toLocaleString();
@@ -46,16 +46,16 @@ export default function AgentsListPage() {
     setLoading(true);
     setError(null);
     try {
-      const [agentsRes, sessionsRes] = await Promise.all([
+      const [agents, sessions] = await Promise.all([
         listAgents(),
-        listSessions(100),
+        listSessions(),
       ]);
       const activeAgentIds = new Set<string>(
-        sessionsRes.data
+        sessions
           .filter((s: SessionRow) => s.status === "ready")
           .map((s: SessionRow) => s.agent_id),
       );
-      const next: RowState[] = agentsRes.data.map((a) => ({
+      const next: RowState[] = agents.map((a) => ({
         agent: a,
         active: activeAgentIds.has(a.id),
       }));
@@ -116,6 +116,7 @@ export default function AgentsListPage() {
               <TableHead className="w-12">Status</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Model</TableHead>
+              <TableHead>Branch</TableHead>
               <TableHead>ID</TableHead>
               <TableHead>Created</TableHead>
             </TableRow>
@@ -124,7 +125,7 @@ export default function AgentsListPage() {
             {rows.length === 0 && !loading ? (
               <TableRow className="hover:bg-transparent">
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="h-32 text-center text-sm text-muted-foreground"
                 >
                   No agents yet. Click + New Agent to create one.
@@ -147,15 +148,16 @@ export default function AgentsListPage() {
                       }
                     />
                   </TableCell>
-                  <TableCell className="font-medium">{agent.name}</TableCell>
+                  <TableCell className="font-medium">
+                    {agent.name ?? <span className="text-muted-foreground">—</span>}
+                  </TableCell>
                   <TableCell>
-                    {agent.config?.model ? (
-                      <Badge variant="secondary" className="font-mono text-[11px]">
-                        {agent.config.model}
-                      </Badge>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
+                    <Badge variant="secondary" className="font-mono text-[11px]">
+                      {agent.model}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">
+                    {agent.branch}
                   </TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {agent.id}
