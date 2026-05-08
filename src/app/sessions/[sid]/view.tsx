@@ -29,6 +29,7 @@ import {
   harnessResponseText,
   sendMessage,
 } from "@/lib/api";
+import { AgentAvatar } from "@/components/agent-avatar";
 
 type LocalRole = "user" | "assistant";
 
@@ -212,6 +213,7 @@ export default function SessionThreadView() {
     <div className="sessions-app flex w-full h-full bg-white text-gray-900 overflow-hidden">
       <MainPanel
         session={session}
+        agent={agent}
         agentName={currentAgentName}
         messages={messages}
         loading={loading}
@@ -236,6 +238,7 @@ export default function SessionThreadView() {
 
 interface MainPanelProps {
   session: SessionRow | null;
+  agent: AgentRow | null;
   agentName: string;
   messages: LocalMessage[];
   loading: boolean;
@@ -253,6 +256,7 @@ interface MainPanelProps {
 
 function MainPanel({
   session,
+  agent,
   agentName,
   messages,
   loading,
@@ -278,6 +282,11 @@ function MainPanel({
       {/* Header */}
       <div className="h-12 border-b border-gray-200 flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-2 text-[13px] text-gray-600">
+          <AgentAvatar
+            name={agent?.name ?? agentName}
+            pfpUrl={agent?.pfp_url}
+            size={22}
+          />
           <span className="font-medium text-gray-800">
             {agentName || "Session"}
           </span>
