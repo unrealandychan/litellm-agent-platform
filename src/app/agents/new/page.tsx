@@ -29,6 +29,15 @@ import { cn } from "@/lib/utils";
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 const NAME_MAX = 64;
 
+function repoShortLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname.replace(/^\//, "").replace(/\.git$/, "") || u.host;
+  } catch {
+    return url;
+  }
+}
+
 export default function NewAgentPage() {
   const router = useRouter();
 
@@ -40,10 +49,10 @@ export default function NewAgentPage() {
   const [pfpUrl, setPfpUrl] = useState<string | null>(null);
 
   const [models, setModels] = useState<ModelRow[]>([]);
-  const [autoTemplate, setAutoTemplate] = useState<TemplateRow | null>(null);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [templateId, setTemplateId] = useState<string>("");
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [metaError, setMetaError] = useState<string | null>(null);
-  const [noReadyTemplate, setNoReadyTemplate] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +68,10 @@ export default function NewAgentPage() {
         ]);
         if (cancelled) return;
         setModels(modelsRes);
-        // Auto-pick the first ready template; templates are infra config, not
-        // a user-facing knob.
-        const ready = templatesRes.find((t) => t.build_status === "ready");
-        setAutoTemplate(ready ?? null);
-        setNoReadyTemplate(!ready);
+        setTemplates(templatesRes);
+        // Auto-select the first ready template, but the user can change it.
+        const firstReady = templatesRes.find((t) => t.build_status === "ready");
+        if (firstReady) setTemplateId(firstReady.id);
       } catch (e) {
         if (cancelled) return;
         setMetaError(
@@ -78,6 +86,21 @@ export default function NewAgentPage() {
       cancelled = true;
     };
   }, []);
+
+  const sortedTemplates = useMemo(() => {
+    // Ready templates first, then alphabetical by display label.
+    return [...templates].sort((a, b) => {
+      const aReady = a.build_status === "ready";
+      const bReady = b.build_status === "ready";
+      if (aReady !== bReady) return aReady ? -1 : 1;
+      return (a.name?.trim() || a.id).localeCompare(b.name?.trim() || b.id);
+    });
+  }, [templates]);
+
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => t.id === templateId) ?? null,
+    [templates, templateId],
+  );
 
   const sortedModels = useMemo(
     () => [...models].sort((a, b) => a.id.localeCompare(b.id)),
@@ -95,7 +118,7 @@ export default function NewAgentPage() {
       return `Name must be ${NAME_MAX} characters or fewer.`;
     }
     if (!model.trim()) return "Model is required.";
-    if (!autoTemplate) return "No sandbox template is ready yet.";
+    if (!templateId) return "Pick a sandbox template.";
     return null;
   }
 
@@ -109,14 +132,14 @@ export default function NewAgentPage() {
       return;
     }
 
-    if (!autoTemplate) return;
+    if (!templateId) return;
     setSubmitting(true);
     try {
       const created = await createAgent({
         name: name.trim() || undefined,
         model: model.trim(),
         prompt: systemPrompt.trim() || undefined,
-        template_id: autoTemplate.id,
+        template_id: templateId,
         branch: branchOverride.trim() || undefined,
         pfp_url: pfpUrl ?? undefined,
       });
@@ -168,27 +191,106 @@ export default function NewAgentPage() {
             </div>
 
             <div className="space-y-1.5">
+              <Label>Sandbox</Label>
+              {loadingMeta ? (
+                <p className="text-xs text-muted-foreground">
+                  Loading sandboxes from proxy…
+                </p>
+              ) : sortedTemplates.length === 0 ? (
+                <p className="font-mono text-xs text-destructive">
+                  No sandboxes are configured. An admin must run{" "}
+                  <span>POST /v1/managed_agents/sandbox-templates</span> first.
+                </p>
+              ) : (
+                <div className="rounded-lg border bg-card">
+                  <ul
+                    role="listbox"
+                    aria-label="Sandbox templates"
+                    className="divide-y"
+                  >
+                    {sortedTemplates.map((t) => {
+                      const selected = t.id === templateId;
+                      const ready = t.build_status === "ready";
+                      return (
+                        <li key={t.id}>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            onClick={() => setTemplateId(t.id)}
+                            disabled={submitting || !ready}
+                            className={cn(
+                              "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
+                              selected && "bg-accent/40",
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "grid size-4 shrink-0 place-items-center rounded-full border transition-colors",
+                                selected
+                                  ? "border-foreground bg-foreground text-background"
+                                  : "border-border bg-transparent",
+                              )}
+                              aria-hidden
+                            >
+                              {selected ? <Check className="size-3" /> : null}
+                            </span>
+                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                              <span className="truncate text-[13px] font-medium text-foreground">
+                                {repoShortLabel(t.repo_url)}
+                              </span>
+                              <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                <span>
+                                  harness:{" "}
+                                  <span className="font-mono text-foreground">
+                                    {t.dockerfile_id}
+                                  </span>
+                                </span>
+                                <span aria-hidden>·</span>
+                                <span className="font-mono">
+                                  {t.default_branch}
+                                </span>
+                              </span>
+                            </span>
+                            {!ready ? (
+                              <span
+                                className={cn(
+                                  "shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide",
+                                  t.build_status === "failed"
+                                    ? "bg-red-50 text-red-700"
+                                    : "bg-amber-50 text-amber-700",
+                                )}
+                              >
+                                {t.build_status}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
               <Label htmlFor="branch">Branch (optional)</Label>
               <Input
                 id="branch"
                 value={branchOverride}
                 onChange={(e) => setBranchOverride(e.target.value)}
                 placeholder={
-                  autoTemplate
-                    ? `default: ${autoTemplate.default_branch}`
+                  selectedTemplate
+                    ? `default: ${selectedTemplate.default_branch}`
                     : "default: main"
                 }
-                disabled={submitting}
+                disabled={submitting || !selectedTemplate}
                 className="font-mono text-xs"
               />
-              {autoTemplate ? (
-                <p className="text-xs text-muted-foreground">
-                  Repo:{" "}
-                  <span className="font-mono text-foreground">
-                    {autoTemplate.repo_url}
-                  </span>
-                </p>
-              ) : null}
+              <p className="text-xs text-muted-foreground">
+                Pin this agent to a specific branch of the sandbox&rsquo;s
+                repo. Leave blank to use the default.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -306,18 +408,9 @@ export default function NewAgentPage() {
                 Could not load template/model lists: {metaError}
               </p>
             ) : null}
-            {!loadingMeta && noReadyTemplate ? (
-              <p className="font-mono text-xs text-destructive">
-                No sandbox is ready. An admin must run{" "}
-                <span className="font-mono">
-                  POST /v1/managed_agents/sandbox-templates
-                </span>{" "}
-                first.
-              </p>
-            ) : null}
 
             <div className="pt-2">
-              <Button type="submit" disabled={submitting || !autoTemplate}>
+              <Button type="submit" disabled={submitting || !templateId}>
                 {submitting ? "Creating…" : "Create agent"}
               </Button>
               {error ? (
