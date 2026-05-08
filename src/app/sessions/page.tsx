@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AgentAvatar } from "@/components/agent-avatar";
 import {
   AgentRow,
   ApiError,
@@ -78,6 +79,12 @@ export default function SessionsListPage() {
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
   }, [load]);
+
+  const agentById = useMemo(() => {
+    const m = new Map<string, AgentRow>();
+    for (const a of agents) m.set(a.id, a);
+    return m;
+  }, [agents]);
 
   const agentNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -160,6 +167,7 @@ export default function SessionsListPage() {
       ) : (
         <ul className="mt-8 overflow-hidden rounded-lg border bg-card">
           {filteredSessions.map((s, i) => {
+            const agent = agentById.get(s.agent_id);
             const agentName = agentNameById.get(s.agent_id) ?? s.agent_id;
             return (
               <li
@@ -170,11 +178,18 @@ export default function SessionsListPage() {
                   (i > 0 ? "border-t" : "")
                 }
               >
-                <span
-                  aria-label={`status ${s.status}`}
-                  title={s.status}
-                  className={`inline-block size-2 shrink-0 rounded-full ${statusDotClass(s.status)}`}
-                />
+                <div className="relative shrink-0">
+                  <AgentAvatar
+                    name={agentName}
+                    pfpUrl={agent?.pfp_url ?? null}
+                    size={32}
+                  />
+                  <span
+                    aria-label={`status ${s.status}`}
+                    title={s.status}
+                    className={`absolute -right-0.5 -bottom-0.5 inline-block size-2.5 rounded-full ring-2 ring-card ${statusDotClass(s.status)}`}
+                  />
+                </div>
                 <div className="min-w-0 flex-1">
                   <button
                     type="button"
