@@ -114,8 +114,9 @@ export interface ServerEnv {
   MASTER_KEY: string;
   AWS_REGION: string;
   AWS_CLUSTER: string;
-  AWS_ACCESS_KEY_ID: string;
-  AWS_SECRET_ACCESS_KEY: string;
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  AWS_PROFILE?: string;
   AWS_TASK_DEFINITION_ARN: string;
   AWS_SUBNETS: string[]; // parsed from comma-separated env
   AWS_SECURITY_GROUP: string;

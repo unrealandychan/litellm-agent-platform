@@ -33,7 +33,6 @@ import {
   DescribeNetworkInterfacesCommand,
   EC2Client,
 } from "@aws-sdk/client-ec2";
-import { fromEnv } from "@aws-sdk/credential-providers";
 import { fetch } from "undici";
 
 import { env } from "@/server/env";
@@ -46,17 +45,15 @@ import {
 
 // ---------------------------------------------------------------------------
 // Module-level singletons. Created once per Node process; reused across calls.
+//
+// Credentials are resolved by the SDK's default provider chain — env vars,
+// shared ~/.aws/{config,credentials} (incl. AWS_PROFILE), SSO cache, ECS
+// task role, EC2 instance metadata. Whatever your shell already uses, the
+// platform uses too.
 // ---------------------------------------------------------------------------
 
-const ecs = new ECSClient({
-  region: env.AWS_REGION,
-  credentials: fromEnv(),
-});
-
-const ec2 = new EC2Client({
-  region: env.AWS_REGION,
-  credentials: fromEnv(),
-});
+const ecs = new ECSClient({ region: env.AWS_REGION });
+const ec2 = new EC2Client({ region: env.AWS_REGION });
 
 const CONTAINER_NAME = "harness";
 const DEFAULT_RUNNING_TIMEOUT_MS = 600_000;

@@ -55,14 +55,30 @@ prompt_missing() {
 }
 
 prompt_missing AWS_REGION             "AWS region"               "us-east-1" 0
-prompt_missing AWS_ACCESS_KEY_ID      "AWS_ACCESS_KEY_ID"        ""          0
-prompt_missing AWS_SECRET_ACCESS_KEY  "AWS_SECRET_ACCESS_KEY"    ""          1
 prompt_missing LITELLM_API_BASE       "LiteLLM gateway URL"      ""          0
 prompt_missing LITELLM_API_KEY        "LiteLLM API key"          ""          1
 
 set -a
 source .env
 set +a
+
+# AWS credentials — accept whatever the default provider chain finds.
+# Env vars in .env work, AWS_PROFILE + ~/.aws/credentials works, SSO works,
+# instance roles work. We just confirm the chain resolves before continuing.
+if ! aws sts get-caller-identity --region "$AWS_REGION" >/dev/null 2>&1; then
+  cat >&2 <<EOF
+✗ AWS credentials not found.
+
+Pick one:
+  • paste keys into .env (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+  • set AWS_PROFILE=<name> in .env (uses ~/.aws/credentials or SSO)
+  • run \`aws sso login --profile <name>\` first
+  • attach an IAM role if you're on EC2/ECS
+
+Then re-run: ./setup.sh
+EOF
+  exit 1
+fi
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REPO=litellm-agents-opencode

@@ -35,9 +35,13 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
-    # Override the host-facing localhost URL with the compose-internal hostname.
     environment:
       DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+      # Make ~/.aws on the host visible to the AWS SDK inside the container so
+      # AWS_PROFILE / SSO / shared-credentials all work without copying secrets.
+      HOME: /home/host
+    volumes:
+      - ${HOME:-/root}/.aws:/home/host/.aws:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -49,6 +53,11 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://litellm:litellm@postgres:5432/litellm_agents
+      # Make ~/.aws on the host visible to the AWS SDK inside the container so
+      # AWS_PROFILE / SSO / shared-credentials all work without copying secrets.
+      HOME: /home/host
+    volumes:
+      - ${HOME:-/root}/.aws:/home/host/.aws:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully

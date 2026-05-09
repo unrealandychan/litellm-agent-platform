@@ -14,8 +14,12 @@ const EnvSchema = z.object({
   MASTER_KEY: z.string().min(8),
   AWS_REGION: z.string().min(1),
   AWS_CLUSTER: z.string().min(1),
-  AWS_ACCESS_KEY_ID: z.string().min(1),
-  AWS_SECRET_ACCESS_KEY: z.string().min(1),
+  // Credentials are resolved by the SDK's default provider chain at runtime,
+  // not parsed here. Set whatever the chain understands: env vars,
+  // AWS_PROFILE + ~/.aws/credentials, SSO, instance role.
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  AWS_PROFILE: z.string().optional(),
   AWS_TASK_DEFINITION_ARN: z.string().min(1),
   AWS_SUBNETS: z
     .string()
