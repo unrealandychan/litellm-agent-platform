@@ -18,9 +18,15 @@
 
 import { ZodError } from "zod";
 
+import type { Prisma } from "@prisma/client";
+
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
-import { expandMessage, harnessSendMessage } from "@/server/harness";
+import {
+  expandMessage,
+  harnessListMessages,
+  harnessSendMessage,
+} from "@/server/harness";
 import {
   HttpError,
   httpError,
@@ -33,6 +39,30 @@ export const dynamic = "force-dynamic";
 
 interface RouteContext {
   params: Promise<{ session_id: string }>;
+}
+
+async function persistHistorySnapshot(opts: {
+  session_id: string;
+  sandbox_url: string;
+  harness_session_id: string;
+}): Promise<void> {
+  try {
+    const msgs = await harnessListMessages({
+      sandbox_url: opts.sandbox_url,
+      harness_session_id: opts.harness_session_id,
+    });
+    await prisma.session.update({
+      where: { session_id: opts.session_id },
+      data: {
+        history: msgs as unknown as Prisma.InputJsonValue,
+      },
+    });
+  } catch (err) {
+    console.warn(
+      `history snapshot failed for session ${opts.session_id}:`,
+      err,
+    );
+  }
 }
 
 export async function POST(req: Request, ctx: RouteContext) {
@@ -79,6 +109,16 @@ export async function POST(req: Request, ctx: RouteContext) {
     await prisma.session.update({
       where: { session_id },
       data: { last_seen_at: new Date() },
+    });
+
+    // Fire-and-forget: snapshot the full opencode thread into Session.history
+    // so a restarted pod can replay it as the next user message's preamble.
+    // Failures are logged and swallowed — never block the user reply on a
+    // history persist.
+    void persistHistorySnapshot({
+      session_id,
+      sandbox_url: row.sandbox_url,
+      harness_session_id: row.harness_session_id,
     });
 
     return Response.json(response);

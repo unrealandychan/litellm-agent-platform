@@ -43,6 +43,7 @@ model Session {
   harness_session_id String?
   failure_reason     String?
   response           Json?     // last harness reply blob (initial_prompt and most-recent message)
+  history            Json?     // full opencode thread snapshot ([{info, parts}, ...]); refreshed after every send so a restarted pod can replay it
   created_at         DateTime  @default(now())
   created_by         String?
   last_seen_at       DateTime?
