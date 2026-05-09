@@ -71,12 +71,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# Include the Prisma CLI + generated client + schema so the entrypoint can
-# run `prisma db push` against $DATABASE_URL on startup. In docker-compose
-# the db-migrate init container does this first; the second push is a no-op.
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
+# The Next.js standalone bundle ships only the runtime node_modules its
+# tracer found — that misses the prisma CLI and its transitive deps (e.g.
+# `effect`), so `prisma db push` at startup would crash with MODULE_NOT_FOUND.
+# Overlay the full builder node_modules so the migration CLI works.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 
