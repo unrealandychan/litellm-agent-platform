@@ -1,5 +1,7 @@
 # LiteLLM Agent Platform
 
+[![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/Nkxw3rm3EE)
+
 Self-hosted infrastructure for running multiple agents in production. Manages:
 
 - Per-team / per-context sandboxes
