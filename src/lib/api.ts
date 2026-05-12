@@ -1017,6 +1017,7 @@ export interface AgentTemplate {
   skill_name: string;
   skill: string;
   tools: string[];
+  requirements: string | null;
 }
 
 // ---------- Harness response helpers ----------
