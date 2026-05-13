@@ -100,37 +100,58 @@ spec:
               value: "admin"
 
             - name: LITELLM_API_BASE
-              value: ""   # set to your LiteLLM proxy URL
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: LITELLM_API_BASE
 
             - name: LITELLM_DEFAULT_MODEL
-              value: "anthropic/claude-sonnet-4-6"
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: LITELLM_DEFAULT_MODEL
 
             - name: PREINSTALLED_GITHUB_REPO
-              value: "https://github.com/BerriAI/litellm"
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: PREINSTALLED_GITHUB_REPO
 
             - name: AWS_REGION
-              value: ""   # set to your EKS cluster region if using EKS auth
+              value: "us-east-1"
 
             - name: K8S_NODE_HOST
               value: "auto"
 
             - name: K8S_HARNESS_IMAGE
-              value: ""   # e.g. <account>.dkr.ecr.<region>.amazonaws.com/claude-agent-sdk-sandbox:latest
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_HARNESS_IMAGE
 
             - name: K8S_NAMESPACE
               value: "default"
 
             - name: K8S_NODEPORT_MIN
-              value: "30000"
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_NODEPORT_MIN
 
             - name: K8S_NODEPORT_MAX
-              value: "30099"
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: K8S_NODEPORT_MAX
 
             - name: K8S_IMAGE_PULL_POLICY
               value: "IfNotPresent"
 
             - name: WARM_POOL_SIZE
-              value: "2"
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-env
+                  key: WARM_POOL_SIZE
 
             # Force in-cluster auth; disable file-based kubeconfig.
             - name: IN_CLUSTER
