@@ -323,25 +323,36 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
 // runTask — create Sandbox CR + NodePort Service
 // ---------------------------------------------------------------------------
 
+interface VolumeMount {
+  name: string;
+  mountPath: string;
+  readOnly?: boolean;
+}
+interface SandboxContainer {
+  name: string;
+  image: string;
+  imagePullPolicy: string;
+  ports?: Array<{ containerPort: number }>;
+  env: Array<{ name: string; value: string }>;
+  volumeMounts?: VolumeMount[];
+  resources: {
+    requests: { cpu: string; memory: string };
+    limits: { cpu: string; memory: string };
+  };
+}
+interface SandboxVolume {
+  name: string;
+  emptyDir?: { medium?: string };
+  secret?: { secretName: string };
+}
 interface SandboxSpec {
   podTemplate: {
-    metadata?: {
-      labels?: Record<string, string>;
-    };
+    metadata?: { labels?: Record<string, string> };
     spec: {
       restartPolicy: string;
       priorityClassName?: string;
-      containers: Array<{
-        name: string;
-        image: string;
-        imagePullPolicy: string;
-        ports: Array<{ containerPort: number }>;
-        env: Array<{ name: string; value: string }>;
-        resources: {
-          requests: { cpu: string; memory: string };
-          limits: { cpu: string; memory: string };
-        };
-      }>;
+      containers: SandboxContainer[];
+      volumes?: SandboxVolume[];
     };
   };
 }
@@ -388,6 +399,9 @@ export async function runTask(
               imagePullPolicy: env.K8S_IMAGE_PULL_POLICY,
               ports: [{ containerPort: agent.container_port }],
               env: await buildContainerEnv(opts),
+              volumeMounts: [
+                { name: "lap-shared", mountPath: "/lap-shared", readOnly: true },
+              ],
               resources: {
                 // Opencode is mostly idle between LLM round-trips — it's a
                 // thin HTTP server forwarding to the model. Right-size the
@@ -399,6 +413,26 @@ export async function runTask(
                 limits: { cpu: "1", memory: "1Gi" },
               },
             },
+            {
+              // vault sidecar — holds the real secrets, MITMs egress, swaps
+              // stubs for real values at the wire.
+              name: "vault",
+              image: env.K8S_VAULT_IMAGE,
+              imagePullPolicy: env.K8S_IMAGE_PULL_POLICY,
+              env: buildVaultEnv(opts),
+              volumeMounts: [
+                { name: "lap-shared", mountPath: "/lap-shared" },
+                { name: "vault-ca", mountPath: "/etc/vault-ca", readOnly: true },
+              ],
+              resources: {
+                requests: { cpu: "20m", memory: "80Mi" },
+                limits: { cpu: "200m", memory: "256Mi" },
+              },
+            },
+          ],
+          volumes: [
+            { name: "lap-shared", emptyDir: { medium: "Memory" } },
+            { name: "vault-ca", secret: { secretName: "vault-ca" } },
           ],
         },
       },
