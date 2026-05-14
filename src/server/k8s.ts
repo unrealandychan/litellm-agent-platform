@@ -865,3 +865,76 @@ export async function probeK8s(): Promise<{ ok: true } | { ok: false; error: str
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// ---------------------------------------------------------------------------
+// fetchVaultInterceptions — pull the debug ring buffer from the vault
+// sidecar inside a sandbox pod. The vault server binds on the pod's IP
+// (port 14322 by default) but isn't published via any Service / NodePort,
+// so this is reachable only from inside the cluster — pod-to-pod from the
+// platform pod to the sandbox pod.
+//
+// Returns `null` when the pod doesn't have an IP yet (sandbox is still
+// scheduling) so callers can render an empty-state row without branching
+// on K8s errors. Any other failure bubbles up — the route handler converts
+// it into a 200 with empty data, mirroring sandbox_logs' lenience.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_VAULT_PORT = 14322;
+const DEFAULT_VAULT_FETCH_TIMEOUT_MS = 5_000;
+
+export interface VaultInterceptionFingerprint {
+  stub: string;
+  credential: string;
+  real_tail: string;
+}
+
+export interface VaultInterception {
+  timestamp: string;
+  method: string;
+  host: string;
+  path: string;
+  stubs_swapped: string[];
+  real_value_fingerprint: VaultInterceptionFingerprint[];
+}
+
+async function podIPFor(task_arn: string): Promise<string | null> {
+  try {
+    const res = await coreApi().readNamespacedPod({
+      name: task_arn,
+      namespace: env.K8S_NAMESPACE,
+    });
+    const pod = (res as unknown as { body?: k8s.V1Pod }).body
+      ?? (res as k8s.V1Pod);
+    return pod.status?.podIP ?? null;
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    throw err;
+  }
+}
+
+export async function fetchVaultInterceptions(
+  task_arn: string,
+  opts: { timeoutMs?: number; port?: number } = {},
+): Promise<VaultInterception[] | null> {
+  const port = opts.port ?? DEFAULT_VAULT_PORT;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_VAULT_FETCH_TIMEOUT_MS;
+  const ip = await podIPFor(task_arn);
+  if (!ip) return null;
+  // IPv6 pod IPs need brackets in the URL. IPv4 passes through unchanged.
+  const hostPart = ip.includes(":") ? `[${ip}]` : ip;
+  const url = `http://${hostPart}:${port}/interceptions`;
+  const res = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    throw new Error(`vault /interceptions ${res.status} ${res.statusText}`);
+  }
+  const body = (await res.json()) as unknown;
+  if (!Array.isArray(body)) {
+    throw new Error("vault /interceptions: expected JSON array");
+  }
+  // Pass through as-is. We don't re-validate per record — the route handler
+  // streams it straight to the client which has its own typing.
+  return body as VaultInterception[];
+}
