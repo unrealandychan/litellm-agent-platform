@@ -21,7 +21,6 @@ import { Activity, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { getStoredMasterKey } from "@/lib/api";
-import { InterceptionsPanel } from "@/app/sessions/[sid]/interceptions-panel";
 
 type BusEvent = {
   id?: string;
@@ -401,8 +400,6 @@ function writeHarnessPref(v: boolean): void {
   }
 }
 
-type InspectorTab = "wire" | "vault";
-
 export function InspectorPanel({
   open,
   onClose,
@@ -412,11 +409,10 @@ export function InspectorPanel({
   onClose: () => void;
   sessionId: string;
 }) {
-  // Top-level tab. "wire" keeps the original SSE inspector; "vault"
-  // surfaces the credential-swap debugger near the Inspect entrypoint so
-  // it isn't buried in chat scroll. State lives in the panel so the
-  // selection survives a close+reopen within the same session.
-  const [tab, setTab] = useState<InspectorTab>("wire");
+  // Vault used to live in a sibling tab here; it was promoted to a
+  // top-level session-header button (see VaultPanel in
+  // src/components/vault-dialog.tsx) so the wire inspector is now
+  // single-purpose again.
   const [hideHeartbeat, setHideHeartbeat] = useState(true);
   // Persisted per-session preference. We initialize from localStorage on
   // mount (not via useState initializer, which would run on the server too).
@@ -486,63 +482,29 @@ export function InspectorPanel({
         </button>
       </header>
 
-      <div className="flex items-center gap-1 px-2 pt-1 border-b border-gray-200 bg-white text-[11px]">
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-gray-200 bg-gray-50/50 text-[11px]">
+        <label className="inline-flex items-center gap-1.5 text-gray-600">
+          <input
+            type="checkbox"
+            checked={hideHeartbeat}
+            onChange={(e) => setHideHeartbeat(e.target.checked)}
+            className="size-3"
+          />
+          hide heartbeats
+        </label>
         <button
           type="button"
-          onClick={() => setTab("wire")}
-          className={`px-3 py-1.5 -mb-px border-b-2 transition-colors ${
-            tab === "wire"
-              ? "border-gray-800 text-gray-800 font-medium"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
+          onClick={clearAll}
+          className="text-gray-500 hover:text-gray-800 underline-offset-2 hover:underline"
         >
-          Wire
+          clear
         </button>
-        <button
-          type="button"
-          onClick={() => setTab("vault")}
-          className={`px-3 py-1.5 -mb-px border-b-2 transition-colors ${
-            tab === "vault"
-              ? "border-gray-800 text-gray-800 font-medium"
-              : "border-transparent text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          Vault
-        </button>
+        <span className="ml-auto text-gray-400 font-mono">
+          {platform.frames.length}
+          {showHarness ? ` · ${harness.frames.length}` : ""} frames
+        </span>
       </div>
 
-      {tab === "wire" && (
-        <div className="flex items-center gap-3 px-4 py-1.5 border-b border-gray-200 bg-gray-50/50 text-[11px]">
-          <label className="inline-flex items-center gap-1.5 text-gray-600">
-            <input
-              type="checkbox"
-              checked={hideHeartbeat}
-              onChange={(e) => setHideHeartbeat(e.target.checked)}
-              className="size-3"
-            />
-            hide heartbeats
-          </label>
-          <button
-            type="button"
-            onClick={clearAll}
-            className="text-gray-500 hover:text-gray-800 underline-offset-2 hover:underline"
-          >
-            clear
-          </button>
-          <span className="ml-auto text-gray-400 font-mono">
-            {platform.frames.length}
-            {showHarness ? ` · ${harness.frames.length}` : ""} frames
-          </span>
-        </div>
-      )}
-
-      {tab === "vault" && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-gray-50/30">
-          <InterceptionsPanel sessionId={sessionId} initialExpanded={true} />
-        </div>
-      )}
-
-      {tab === "wire" && (
       <div className="flex flex-1 min-h-0">
         <section className="flex flex-col flex-1 min-w-0 min-h-0">
           <div className="flex items-center gap-2 px-4 py-1.5 bg-violet-50/40 border-b border-gray-200">
@@ -598,12 +560,9 @@ export function InspectorPanel({
           </section>
         )}
       </div>
-      )}
 
       <footer className="px-4 py-1.5 border-t border-gray-200 text-[10px] text-gray-400 font-mono">
-        {tab === "wire"
-          ? "tee'd /message_stream · optional raw /stream"
-          : "vault sidecar /interceptions (per-session ring buffer)"}
+        tee&apos;d /message_stream · optional raw /stream
       </footer>
     </aside>
   );
