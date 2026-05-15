@@ -53,7 +53,7 @@ export default function NewAgentPage() {
   // "blank" = no template; any other string = template id
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("blank");
   const [templates, setTemplates] = useState<AgentTemplate[]>([]);
-  const [activeTemplateTab, setActiveTemplateTab] = useState<"overview" | "skill" | "prompt">("overview");
+  const [activeTemplateTab, setActiveTemplateTab] = useState<"overview" | "files" | "skill" | "prompt">("overview");
   // Per-template skill edits — keyed by template id
   const [skillEdits, setSkillEdits] = useState<Record<string, string>>({});
   // Per-template skill edit mode — false = rendered preview, true = raw textarea
@@ -412,7 +412,7 @@ export default function NewAgentPage() {
         </div>
       )}
 
-      <div className={cn("mt-5", selectedTemplate && "grid grid-cols-[1fr,440px] items-start gap-6")}>
+      <div className={cn("mt-5", selectedTemplate && "grid grid-cols-1 items-start gap-6 xl:grid-cols-[1fr,440px]")}>
         <Card>
         <CardHeader className="sr-only">
           <CardTitle>New Agent</CardTitle>
@@ -873,8 +873,9 @@ export default function NewAgentPage() {
           <div className="sticky top-6">
             <Card className="overflow-hidden">
               <div className="flex border-b text-[13px]">
-                {(["overview", "skill", "prompt"] as const)
+                {(["overview", "files", "skill", "prompt"] as const)
                   .filter((tab) => {
+                    if (tab === "files") return selectedTemplate.files.length > 0;
                     if (tab === "skill") return !!selectedTemplate.skill;
                     if (tab === "prompt") return !!selectedTemplate.prompt;
                     return true;
@@ -901,15 +902,12 @@ export default function NewAgentPage() {
                     {selectedTemplate.files.length > 0 && (
                       <div>
                         <p className="mb-1.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">Files</p>
-                        <div className="space-y-3">
+                        <div className="space-y-1">
                           {selectedTemplate.files.map((f) => (
-                            <div key={f.template_path}>
-                              <div className="mb-1 flex items-center gap-2 font-mono text-[12px]">
-                                <span className="rounded border border-border bg-muted px-2 py-0.5">{f.template_path}</span>
-                                <span className="text-muted-foreground">→</span>
-                                <span className="text-muted-foreground">{f.sandbox_path}</span>
-                              </div>
-                              <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-[11px] text-foreground">{f.content}</pre>
+                            <div key={f.template_path} className="flex items-center gap-2 font-mono text-[12px]">
+                              <span className="rounded border border-border bg-muted px-2 py-0.5">{f.template_path}</span>
+                              <span className="text-muted-foreground">→</span>
+                              <span className="text-muted-foreground">{f.sandbox_path}</span>
                             </div>
                           ))}
                         </div>
@@ -945,6 +943,20 @@ export default function NewAgentPage() {
                         </div>
                       </div>
                     )}
+                  </div>
+                )}
+                {activeTemplateTab === "files" && (
+                  <div className="space-y-4">
+                    {selectedTemplate.files.map((f) => (
+                      <div key={f.template_path}>
+                        <div className="mb-1.5 flex items-center gap-2 font-mono text-[12px]">
+                          <span className="rounded border border-border bg-muted px-2 py-0.5">{f.template_path}</span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className="text-muted-foreground">{f.sandbox_path}</span>
+                        </div>
+                        <pre className="overflow-x-auto rounded-md border bg-muted/30 px-4 py-3 font-mono text-[12px] text-foreground">{f.content}</pre>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {activeTemplateTab === "skill" && (
