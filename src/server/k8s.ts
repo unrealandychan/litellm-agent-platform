@@ -257,6 +257,32 @@ function slugifySkillName(name: string, fallback: string): string {
   return base;
 }
 
+// Claude Code only recognizes a SKILL.md when it begins with a YAML
+// frontmatter block declaring `name:` and `description:`. Skill content
+// authored in the LiteLLM UI is usually bare markdown, so we synthesize
+// frontmatter from the DB row's name/description when the content
+// doesn't already provide its own. JSON.stringify yields safe YAML for
+// any description string (YAML is a JSON superset for scalars).
+function ensureSkillFrontmatter(
+  content: string,
+  meta: { slug: string; name: string; description: string | null },
+): string {
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith("---\n") || trimmed.startsWith("---\r\n")) {
+    return content;
+  }
+  const description =
+    (meta.description ?? "").trim() || `${meta.name} skill`;
+  return [
+    "---",
+    `name: ${meta.slug}`,
+    `description: ${JSON.stringify(description)}`,
+    "---",
+    "",
+    trimmed,
+  ].join("\n");
+}
+
 // Resolve the `<!-- skill:<id> -->` markers in the agent's prompt back into
 // the skill rows we need to materialize on disk inside the sandbox. The
 // platform writes the markers at agent-create or skill-attach time; here we
@@ -270,7 +296,7 @@ async function buildSkillsJsonForAgent(
   if (ids.length === 0) return [];
   const skills = await prisma.skill.findMany({
     where: { skill_id: { in: ids } },
-    select: { skill_id: true, name: true, content: true },
+    select: { skill_id: true, name: true, description: true, content: true },
   });
   const byId = new Map(skills.map((s) => [s.skill_id, s]));
   const used = new Set<string>();
@@ -288,7 +314,14 @@ async function buildSkillsJsonForAgent(
       slug = `${slug}-${i}`;
     }
     used.add(slug);
-    out.push({ slug, content: row.content });
+    out.push({
+      slug,
+      content: ensureSkillFrontmatter(row.content, {
+        slug,
+        name: row.name,
+        description: row.description,
+      }),
+    });
   }
   return out;
 }
