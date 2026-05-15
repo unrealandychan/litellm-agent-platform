@@ -148,6 +148,14 @@ export interface TemplateRow {
   build_error?: string | null;
 }
 
+export interface SandboxFileSpec {
+  name: string;
+  sandbox_path: string;
+  content: string;      // base64-encoded
+  content_type: string;
+  size: number;
+}
+
 export interface AgentRow {
   id: string;
   name?: string | null;
@@ -160,6 +168,7 @@ export interface AgentRow {
   env_vars?: Record<string, string>;
   allow_out?: string[];
   deny_out?: string[];
+  sandbox_files?: SandboxFileSpec[];
   /**
    * IDs of skills currently attached to this agent, in attach order.
    * Parsed server-side from `<!-- skill:<id> -->` markers in `prompt`.
@@ -429,6 +438,7 @@ export interface CreateAgentRequest {
   env_vars?: Record<string, string>;
   allow_out?: string[];
   deny_out?: string[];
+  sandbox_files?: SandboxFileSpec[];
 }
 
 export interface UpdateAgentRequest {

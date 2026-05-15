@@ -30,6 +30,7 @@
 import { assertAuth } from "@/server/auth";
 import { prisma } from "@/server/db";
 import {
+  execFilesIntoContainer,
   runTask,
   waitHttpReady,
   waitRunningGetUrl,
@@ -210,6 +211,14 @@ async function coldBringUp(
   await setPhase(session_id, "pod_pending");
   const sandbox_url = await waitRunningGetUrl(task_arn, agent);
   await setPhase(session_id, "pod_running");
+  const rawSandboxFiles = (agent as Record<string, unknown>).sandbox_files;
+  const sandboxFiles = Array.isArray(rawSandboxFiles)
+    ? (rawSandboxFiles as import("@/server/types").SandboxFileSpec[])
+    : [];
+  if (sandboxFiles.length > 0) {
+    await setPhase(session_id, "injecting_files");
+    await execFilesIntoContainer(task_arn, sandboxFiles);
+  }
   await setPhase(session_id, "waiting_harness");
   await waitHttpReady(sandbox_url);
   await setPhase(session_id, "harness_ready");
