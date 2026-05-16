@@ -366,6 +366,15 @@ function attachPty(wsUrl, ttyToken) {
     // would crash on every binary PTY frame because stdout.write rejects
     // ArrayBuffer.
 
+    // Keep-alive: AWS classic ELB defaults to 60s idle timeout, and many
+    // corporate proxies / NLBs are similarly tight. The TTY can sit silent
+    // for minutes (model thinking, user reading a permission prompt) and
+    // the WS gets silently dropped — the next keystroke goes to a dead
+    // socket and the user sees "[connection closed]" with no warning.
+    // Send a protocol-level WS ping every 30s so there's always recent
+    // traffic. The ws library handles pong correlation automatically.
+    let pingTimer;
+
     ws.on("open", () => {
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(true);
@@ -376,6 +385,11 @@ function attachPty(wsUrl, ttyToken) {
         cols: process.stdout.columns || 100,
         rows: process.stdout.rows || 30,
       }));
+
+      pingTimer = setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        try { ws.ping(); } catch { /* underlying socket already torn down */ }
+      }, 30_000);
 
       process.stdin.on("data", (data) => {
         if (ws.readyState !== WebSocket.OPEN) return;
@@ -400,6 +414,7 @@ function attachPty(wsUrl, ttyToken) {
     });
 
     ws.on("close", () => {
+      if (pingTimer) clearInterval(pingTimer);
       if (process.stdin.isTTY) process.stdin.setRawMode(false);
       console.log("\n  \x1b[2m[connection closed]\x1b[0m");
       resolve();
