@@ -15,10 +15,11 @@ FROM node:20-bookworm-slim
 # Build deps for node-pty's native binding + runtime deps for both the WS
 # bridge and the Hermes Python install (python3, git for clone, ripgrep for
 # hermes's code search, build tools for any pure-Python wheels that need
-# compilation).
+# compilation). tmux is the wrapper that survives WS reconnects — see
+# server.js SPAWN_CMD / SPAWN_ARGS, same pattern as claude-code/codex.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates bash curl python3 python3-venv python3-dev \
-      make g++ ripgrep \
+      make g++ ripgrep tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv as a single static binary, pinned by version + SHA-256
