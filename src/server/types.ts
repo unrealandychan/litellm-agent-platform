@@ -817,9 +817,11 @@ export const HARNESS_CLAUDE_SDK = "claude-agent-sdk";
 // The session view attaches xterm.js directly.
 export const HARNESS_CLAUDE_CODE = "claude-code";
 export const HARNESS_CODEX = "codex";
+export const HARNESS_HERMES = "hermes";
 export const TUI_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
+  HARNESS_HERMES,
 ]);
 
 /** True when the harness exposes a PTY over `/tty` (see `TUI_HARNESSES`). */
@@ -831,6 +833,7 @@ export const KNOWN_HARNESSES: ReadonlySet<string> = new Set([
   HARNESS_CLAUDE_SDK,
   HARNESS_CLAUDE_CODE,
   HARNESS_CODEX,
+  HARNESS_HERMES,
 ]);
 
 // Resolves the container image for a harness at runtime from env vars.
@@ -845,6 +848,7 @@ export function resolveHarnessImage(
     K8S_HARNESS_IMAGE_CLAUDE_SDK?: string;
     K8S_HARNESS_IMAGE_CLAUDE_CODE?: string;
     K8S_HARNESS_IMAGE_CODEX?: string;
+    K8S_HARNESS_IMAGE_HERMES?: string;
   },
 ): string {
   const map: Record<string, string | undefined> = {
@@ -852,6 +856,7 @@ export function resolveHarnessImage(
     [HARNESS_OPENCODE]: harnessEnv.K8S_HARNESS_IMAGE_OPENCODE,
     [HARNESS_CLAUDE_CODE]: harnessEnv.K8S_HARNESS_IMAGE_CLAUDE_CODE,
     [HARNESS_CODEX]: harnessEnv.K8S_HARNESS_IMAGE_CODEX,
+    [HARNESS_HERMES]: harnessEnv.K8S_HARNESS_IMAGE_HERMES,
   };
   return map[harness_id] ?? harnessEnv.K8S_HARNESS_IMAGE;
 }
