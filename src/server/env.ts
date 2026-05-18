@@ -37,6 +37,7 @@ const EnvSchema = z.object({
   K8S_HARNESS_IMAGE_CLAUDE_CODE: z.string().min(1).optional(),
   K8S_HARNESS_IMAGE_CODEX: z.string().min(1).optional(),
   K8S_HARNESS_IMAGE_HERMES: z.string().min(1).optional(),
+  K8S_HARNESS_IMAGE_GEMINI: z.string().min(1).optional(),
   K8S_VAULT_IMAGE: z.string().min(1).default("vault:dev"),
   K8S_API_SERVER: z.string().optional().default(""),
   // Explicit opt-in to skip TLS verification when K8S_API_SERVER is
