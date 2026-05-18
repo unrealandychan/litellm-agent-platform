@@ -292,7 +292,9 @@ async function openAgent(args) {
     process.stdout.write(".");
     if (session?.status === "ready") break;
     if (session?.status === "failed" || session?.status === "dead") {
-      console.error(`\n  \x1b[31m✗ ${session.status}: ${session.failure_reason ?? ""}\x1b[0m`);
+      const fr = session.failure_reason;
+      const frStr = fr == null ? "" : typeof fr === "string" ? fr : JSON.stringify(fr);
+      console.error(`\n  \x1b[31m✗ ${session.status}: ${frStr}\x1b[0m`);
       process.exit(1);
     }
   }
