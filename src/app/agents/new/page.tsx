@@ -21,7 +21,7 @@ import { PfpUpload } from "@/components/pfp-upload";
 import { HarnessPicker, DEFAULT_HARNESS_ID } from "@/components/harness-picker";
 import { ModelPicker } from "@/components/model-picker";
 import { McpToolsPicker, EnabledTools, EnabledToolsUpdater } from "@/components/mcp-tools-picker";
-import { SANDBOX_TEMPLATES_STORAGE_KEY } from "@/lib/constants";
+import { PROJECTS_STORAGE_KEY } from "@/lib/constants";
 import {
   AgentTemplate,
   ApiError,
@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
 const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 const NAME_MAX = 64;
 
-interface SandboxTemplate {
+interface LocalProject {
   id: string;
   name: string;
   repo_url?: string;
@@ -71,18 +71,18 @@ export default function NewAgentPage() {
   }, []);
 
   // Sandbox templates (repo + env var keys) from localStorage
-  const [sandboxTemplates, setSandboxTemplates] = useState<SandboxTemplate[]>([]);
-  const [selectedSandboxId, setSelectedSandboxId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<LocalProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(SANDBOX_TEMPLATES_STORAGE_KEY);
-      if (raw) setSandboxTemplates(JSON.parse(raw) as SandboxTemplate[]);
+      const raw = window.localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (raw) setProjects(JSON.parse(raw) as LocalProject[]);
     } catch { /* ignore */ }
   }, []);
 
-  function applySandboxTemplate(id: string | null) {
-    setSelectedSandboxId(id === selectedSandboxId ? null : id);
+  function applyProject(id: string | null) {
+    setSelectedProjectId(id === selectedProjectId ? null : id);
   }
 
   // Selecting a template immediately pre-fills the form fields.
@@ -342,23 +342,23 @@ export default function NewAgentPage() {
         }
       }
 
-      const sandboxTpl = sandboxTemplates.find((s) => s.id === selectedSandboxId);
+      const selectedProject = projects.find((s) => s.id === selectedProjectId);
       const created = await createAgent({
         name: name.trim() || undefined,
         model: model.trim(),
         prompt: finalPrompt,
         harness_id: harnessId,
         requirements: selectedTemplate?.requirements ?? undefined,
-        repo_url: sandboxTpl?.repo_url || undefined,
+        repo_url: selectedProject?.repo_url || undefined,
         branch: branchOverride.trim() || undefined,
         pfp_url: pfpUrl ?? undefined,
         mcp_servers: mcpServers.length > 0 ? mcpServers : undefined,
         mcp_allowed_tools:
           mcpAllowedTools.length > 0 ? mcpAllowedTools : undefined,
         env_vars: Object.keys(envVarsRecord).length > 0 ? envVarsRecord : undefined,
-        allow_out: sandboxTpl?.allow_out,
-        deny_out: sandboxTpl?.deny_out,
-        sandbox_files: sandboxTpl?.files,
+        allow_out: selectedProject?.allow_out,
+        deny_out: selectedProject?.deny_out,
+        sandbox_files: selectedProject?.files,
         skill_ids: pickedSkillIds.length > 0 ? pickedSkillIds : undefined,
       });
       router.push(`/agents/${created.id}`);
@@ -457,21 +457,21 @@ export default function NewAgentPage() {
               />
             </div>
 
-            {sandboxTemplates.length > 0 && (
+            {projects.length > 0 && (
               <div className="space-y-2">
-                <Label>Sandbox Template (optional)</Label>
+                <Label>Project (optional)</Label>
                 <p className="text-[11px] text-muted-foreground">
                   Pre-fills repo URL and env var keys. Values stay empty — fill in your own.
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {sandboxTemplates.map((t) => {
-                    const active = selectedSandboxId === t.id;
+                  {projects.map((t) => {
+                    const active = selectedProjectId === t.id;
                     const keys = Object.keys(t.env_vars ?? {});
                     return (
                       <button
                         key={t.id}
                         type="button"
-                        onClick={() => applySandboxTemplate(active ? null : t.id)}
+                        onClick={() => applyProject(active ? null : t.id)}
                         disabled={submitting}
                         className={cn(
                           "flex flex-col items-start gap-1 rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -496,7 +496,7 @@ export default function NewAgentPage() {
                   })}
                 </div>
                 {(() => {
-                  const sel = sandboxTemplates.find((s) => s.id === selectedSandboxId);
+                  const sel = projects.find((s) => s.id === selectedProjectId);
                   const keys = Object.keys(sel?.env_vars ?? {});
                   if (!sel || keys.length === 0) return null;
                   return (
@@ -521,7 +521,7 @@ export default function NewAgentPage() {
               <Label>Harness</Label>
               <HarnessPicker value={harnessId} onChange={setHarnessId} disabled={submitting} />
               {(() => {
-                const sandboxRepo = sandboxTemplates.find((s) => s.id === selectedSandboxId)?.repo_url;
+                const sandboxRepo = projects.find((s) => s.id === selectedProjectId)?.repo_url;
                 const repo = sandboxRepo || preinstalledRepo;
                 return repo ? (
                   <p className="text-[11px] text-muted-foreground">
@@ -530,7 +530,7 @@ export default function NewAgentPage() {
                       {repo}
                     </a>
                     {sandboxRepo && (
-                      <span className="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">from template</span>
+                      <span className="ml-1.5 rounded border border-border bg-muted px-1 py-0.5 font-mono text-[9px] text-muted-foreground">from project</span>
                     )}
                   </p>
                 ) : null;

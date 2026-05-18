@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronDown, ChevronRight, FileText, LayoutTemplate, Plus, Settings } from "lucide-react";
 
-interface SandboxTemplate { id: string; name: string; }
+interface LocalProject { id: string; name: string; }
 
 import { AgentAvatar } from "@/components/agent-avatar";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -18,7 +18,7 @@ import {
   listSessions,
   listSkills,
 } from "@/lib/api";
-import { SANDBOX_TEMPLATES_STORAGE_KEY } from "@/lib/constants";
+import { PROJECTS_STORAGE_KEY } from "@/lib/constants";
 
 const REPO_URL = "https://github.com/BerriAI/litellm-agent-platform";
 const POLL_INTERVAL_MS = 10000;
@@ -73,13 +73,13 @@ export function Sidebar() {
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [skills, setSkills] = useState<SkillRow[]>([]);
-  const [sandboxTemplates, setSandboxTemplates] = useState<SandboxTemplate[]>([]);
+  const [projects, setProjects] = useState<LocalProject[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(SANDBOX_TEMPLATES_STORAGE_KEY);
-      if (raw) setSandboxTemplates(JSON.parse(raw) as SandboxTemplate[]);
+      const raw = window.localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (raw) setProjects(JSON.parse(raw) as LocalProject[]);
     } catch { /* ignore */ }
   }, []);
 
@@ -461,23 +461,23 @@ export function Sidebar() {
           </ul>
         </div>
 
-        {/* Templates */}
+        {/* Projects */}
         <div className="mt-3">
           <SectionHeader
-            label="Templates"
-            count={sandboxTemplates.length}
-            href="/templates"
-            active={pathname === "/templates"}
+            label="Projects"
+            count={projects.length}
+            href="/projects"
+            active={pathname === "/projects"}
           />
           <ul className="space-y-px">
-            {sandboxTemplates.length === 0 ? (
+            {projects.length === 0 ? (
               <li className="px-2 py-1 text-[11px] text-muted-foreground">
-                No templates yet.
+                No projects yet.
               </li>
             ) : (
-              sandboxTemplates.map((t) => {
-                const href = `/templates`;
-                const active = pathname === "/templates";
+              projects.map((t) => {
+                const href = `/projects`;
+                const active = pathname === "/projects";
                 return (
                   <li key={t.id}>
                     <Link

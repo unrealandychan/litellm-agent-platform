@@ -8,19 +8,19 @@ import { Tooltip } from "@base-ui/react/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { LocalTemplate, SandboxFile } from "../../page";
-import { SANDBOX_TEMPLATES_STORAGE_KEY } from "@/lib/constants";
+import type { LocalProject, SandboxFile } from "../../page";
+import { PROJECTS_STORAGE_KEY } from "@/lib/constants";
 
-function loadLocalTemplates(): LocalTemplate[] {
+function loadLocalProjects(): LocalProject[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(SANDBOX_TEMPLATES_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LocalTemplate[]) : [];
+    const raw = window.localStorage.getItem(PROJECTS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as LocalProject[]) : [];
   } catch { return []; }
 }
 
-function saveLocalTemplates(ts: LocalTemplate[]): void {
-  try { window.localStorage.setItem(SANDBOX_TEMPLATES_STORAGE_KEY, JSON.stringify(ts)); } catch { /* ignore */ }
+function saveLocalProjects(ts: LocalProject[]): void {
+  try { window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(ts)); } catch { /* ignore */ }
 }
 
 function generateId(): string {
@@ -82,7 +82,7 @@ function TagInput({
   );
 }
 
-export default function EditTemplatePage() {
+export default function EditProjectPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
 
@@ -99,7 +99,7 @@ export default function EditTemplatePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const templates = loadLocalTemplates();
+    const templates = loadLocalProjects();
     const t = templates.find((x) => x.id === params.id);
     if (!t) { setNotFound(true); return; }
 
@@ -208,11 +208,11 @@ export default function EditTemplatePage() {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       .map(({ id: _id, ...fd }) => fd);
 
-    const existing = loadLocalTemplates();
+    const existing = loadLocalProjects();
     const idx = existing.findIndex((t) => t.id === originalId);
-    if (idx === -1) { setError("Template not found — it may have been deleted."); setSubmitting(false); return; }
+    if (idx === -1) { setError("Project not found — it may have been deleted."); setSubmitting(false); return; }
 
-    const updated: LocalTemplate = {
+    const updated: LocalProject = {
       ...existing[idx],
       name: name.trim(),
       repo_url: repoUrl.trim() || undefined,
@@ -224,16 +224,16 @@ export default function EditTemplatePage() {
 
     const next = [...existing];
     next[idx] = updated;
-    saveLocalTemplates(next);
-    router.push("/templates");
+    saveLocalProjects(next);
+    router.push("/projects");
   }
 
   if (notFound) {
     return (
       <div className="mx-auto w-full max-w-2xl px-6 py-8">
-        <p className="text-[13px] text-muted-foreground">Template not found.</p>
-        <button type="button" onClick={() => router.push("/templates")} className="mt-2 rounded text-[13px] underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          Back to templates
+        <p className="text-[13px] text-muted-foreground">Project not found.</p>
+        <button type="button" onClick={() => router.push("/projects")} className="mt-2 rounded text-[13px] underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          Back to projects
         </button>
       </div>
     );
@@ -242,7 +242,7 @@ export default function EditTemplatePage() {
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-8">
       <div className="mb-6 border-b pb-4">
-        <h1 className="text-[22px] font-semibold tracking-tight text-foreground">Edit Template</h1>
+        <h1 className="text-[22px] font-semibold tracking-tight text-foreground">Edit Project</h1>
         <p className="mt-0.5 text-[13px] text-muted-foreground">Sandbox config — repo, env vars, and network egress.</p>
       </div>
 
@@ -421,7 +421,7 @@ export default function EditTemplatePage() {
           <Button type="submit" disabled={submitting}>
             {submitting ? <><Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden />Saving…</> : <>Save Changes</>}
           </Button>
-          <Button type="button" variant="ghost" disabled={submitting} onClick={() => router.push("/templates")}>
+          <Button type="button" variant="ghost" disabled={submitting} onClick={() => router.push("/projects")}>
             Cancel
           </Button>
         </div>

@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { SANDBOX_TEMPLATES_STORAGE_KEY } from "@/lib/constants";
+import { PROJECTS_STORAGE_KEY } from "@/lib/constants";
 
 export interface SandboxFile {
   name: string;
@@ -25,7 +25,7 @@ export interface SandboxFile {
   size: number;
 }
 
-export interface LocalTemplate {
+export interface LocalProject {
   id: string;
   name: string;
   repo_url?: string;
@@ -47,38 +47,38 @@ export interface LocalTemplate {
   source: "local";
 }
 
-function loadLocalTemplates(): LocalTemplate[] {
+function loadLocalProjects(): LocalProject[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(SANDBOX_TEMPLATES_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LocalTemplate[]) : [];
+    const raw = window.localStorage.getItem(PROJECTS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as LocalProject[]) : [];
   } catch { return []; }
 }
 
-function saveLocalTemplates(ts: LocalTemplate[]): void {
-  try { window.localStorage.setItem(SANDBOX_TEMPLATES_STORAGE_KEY, JSON.stringify(ts)); } catch { /* ignore */ }
+function saveLocalProjects(ts: LocalProject[]): void {
+  try { window.localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(ts)); } catch { /* ignore */ }
 }
 
-function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelete?: () => void; }) {
-  const envKeys = Object.keys(template.env_vars ?? {});
-  const allowOut = template.allow_out ?? [];
-  const denyOut = template.deny_out ?? [];
+function ProjectCard({ project, onDelete }: { project: LocalProject; onDelete?: () => void; }) {
+  const envKeys = Object.keys(project.env_vars ?? {});
+  const allowOut = project.allow_out ?? [];
+  const denyOut = project.deny_out ?? [];
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-card p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-[13px] font-semibold text-foreground">{template.name}</p>
-          {template.repo_url && (
+          <p className="truncate text-[13px] font-semibold text-foreground">{project.name}</p>
+          {project.repo_url && (
             <p className="truncate font-mono text-[11px] text-muted-foreground">
-              {template.repo_url.replace("https://github.com/", "")}
+              {project.repo_url.replace("https://github.com/", "")}
             </p>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Link
-            href={`/templates/${template.id}/edit`}
-            aria-label={`Edit ${template.name}`}
+            href={`/projects/${project.id}/edit`}
+            aria-label={`Edit ${project.name}`}
             className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             <Pencil className="size-3.5" aria-hidden />
@@ -88,7 +88,7 @@ function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelet
               render={
                 <button
                   type="button"
-                  aria-label={`Delete ${template.name}`}
+                  aria-label={`Delete ${project.name}`}
                   className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 dark:hover:bg-red-950 dark:hover:text-red-400"
                 />
               }
@@ -97,9 +97,9 @@ function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelet
             </DialogTrigger>
             <DialogContent showCloseButton={false}>
               <DialogHeader>
-                <DialogTitle>Delete Template</DialogTitle>
+                <DialogTitle>Delete Project</DialogTitle>
                 <DialogDescription>
-                  Delete <strong className="text-foreground">{template.name}</strong>? This cannot be undone.
+                  Delete <strong className="text-foreground">{project.name}</strong>? This cannot be undone.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
@@ -125,14 +125,14 @@ function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelet
         </div>
       )}
 
-      {(template.files ?? []).length > 0 && (
+      {(project.files ?? []).length > 0 && (
         <div className="space-y-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-2">
           <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             <FileCode className="size-2.5" aria-hidden />
             Sandbox Files
           </p>
           <div className="space-y-0.5">
-            {template.files!.map((f, i) => (
+            {project.files!.map((f, i) => (
               <p key={i} className="truncate font-mono text-[10px] text-muted-foreground">{f.sandbox_path}</p>
             ))}
           </div>
@@ -171,20 +171,20 @@ function TemplateCard({ template, onDelete }: { template: LocalTemplate; onDelet
   );
 }
 
-export default function TemplatesPage() {
-  const [templates, setTemplates] = useState<LocalTemplate[]>([]);
+export default function ProjectsPage() {
+  const [projects, setProjects] = useState<LocalProject[]>([]);
 
-  useEffect(() => { setTemplates(loadLocalTemplates()); }, []);
+  useEffect(() => { setProjects(loadLocalProjects()); }, []);
 
   function deleteTemplate(id: string) {
-    setTemplates((prev) => {
+    setProjects((prev) => {
       const next = prev.filter((t) => t.id !== id);
-      saveLocalTemplates(next);
+      saveLocalProjects(next);
       return next;
     });
   }
 
-  const all = templates;
+  
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
@@ -195,29 +195,29 @@ export default function TemplatesPage() {
             Preconfigured sandbox environments for agent creation.
           </p>
         </div>
-        <Link href="/templates/new" className={buttonVariants()}>
+        <Link href="/projects/new" className={buttonVariants()}>
           <Plus className="size-4" aria-hidden />
           New Template
         </Link>
       </div>
 
-      {all.length === 0 && (
+      {projects.length === 0 && (
         <div className="rounded-lg border border-dashed bg-muted/30 px-6 py-12 text-center">
-          <p className="text-[13px] text-muted-foreground">No templates yet.</p>
+          <p className="text-[13px] text-muted-foreground">No projects yet.</p>
           <p className="mt-1 text-[12px] text-muted-foreground">
-            <Link href="/templates/new" className="underline underline-offset-2 hover:text-foreground">
-              Create your first template →
+            <Link href="/projects/new" className="underline underline-offset-2 hover:text-foreground">
+              Create your first project →
             </Link>
           </p>
         </div>
       )}
 
-      {all.length > 0 && (
+      {projects.length > 0 && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {all.map((t) => (
-            <TemplateCard
+          {projects.map((t) => (
+            <ProjectCard
               key={t.id}
-              template={t}
+              project={t}
               onDelete={() => deleteTemplate(t.id)}
             />
           ))}
