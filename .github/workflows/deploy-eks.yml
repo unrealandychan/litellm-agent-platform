@@ -287,6 +287,15 @@ jobs:
           envsubst '$GIT_SHA' < k8s/web.yaml    | kubectl apply -n default -f -
           envsubst '$GIT_SHA' < k8s/worker.yaml | kubectl apply -n default -f -
 
+      - name: Verify RBAC — pods/exec permission
+        run: |
+          # Fail the deploy if the platform ServiceAccount can't exec into
+          # pods. Missing this verb causes sandbox_files injection to fail
+          # silently at phase=injecting_files with failure_reason=[object Object].
+          kubectl auth can-i create pods/exec \
+            --namespace default \
+            --as system:serviceaccount:default:litellm-platform
+
       - name: Update web deployment image
         run: |
           IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/litellm-agent-platform:${{ github.sha }}"

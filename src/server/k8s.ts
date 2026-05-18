@@ -984,47 +984,53 @@ export async function execFilesIntoContainer(
     const content = Buffer.from(file.content, "base64");
 
     const execPromise = new Promise<void>((resolve, reject) => {
+      const wrapExecErr = (prefix: string, err: unknown): Error => {
+        if (err instanceof Error) return err;
+        if (err && typeof err === "object") {
+          const e = err as { message?: string; error?: { message?: string } };
+          const msg = e.message ?? e.error?.message ?? JSON.stringify(err);
+          return new Error(`${prefix}: ${msg}`);
+        }
+        return new Error(`${prefix}: ${String(err)}`);
+      };
+
       const stdin = new PassThrough();
-      void execApi
-        .exec(
-          env.K8S_NAMESPACE,
-          task_arn,
-          CONTAINER_NAME,
-          // Expand a leading ~ to $HOME inside the container, then write.
-          // $1 is passed as a positional arg to avoid shell-quoting issues.
-          ["sh", "-c", 'p=$(echo "$1" | sed "s|^~|$HOME|"); mkdir -p "$(dirname "$p")" && cat > "$p"', "--", dest],
-          null,
-          null,
-          stdin,
-          false,
-          (status: k8s.V1Status) => {
-            if (status.status === "Success") resolve();
-            else
-              reject(
-                new Error(
-                  `sandbox file inject failed (${dest}): ${status.message ?? JSON.stringify(status)}`,
-                ),
-              );
-          },
-        )
-        .then(() => {
-          stdin.write(content);
-          stdin.end();
-        })
-        .catch((wsErr: unknown) => {
-            // k8s WebSocketHandler rejects with a WebSocket ErrorEvent (not an
-            // Error instance) when the exec connection fails. Wrap it so the
-            // outer catch can read a useful message instead of "[object Object]".
-            if (wsErr instanceof Error) {
-              reject(wsErr);
-            } else if (wsErr && typeof wsErr === "object") {
-              const e = wsErr as { message?: string; error?: { message?: string } };
-              const msg = e.message ?? e.error?.message ?? JSON.stringify(wsErr);
-              reject(new Error(`exec WebSocket error: ${msg}`));
-            } else {
-              reject(new Error(`exec WebSocket error: ${String(wsErr)}`));
-            }
+      try {
+        void execApi
+          .exec(
+            env.K8S_NAMESPACE,
+            task_arn,
+            CONTAINER_NAME,
+            // Expand a leading ~ to $HOME inside the container, then write.
+            // $1 is passed as a positional arg to avoid shell-quoting issues.
+            ["sh", "-c", 'p=$(echo "$1" | sed "s|^~|$HOME|"); mkdir -p "$(dirname "$p")" && cat > "$p"', "--", dest],
+            null,
+            null,
+            stdin,
+            false,
+            (status: k8s.V1Status) => {
+              if (status.status === "Success") resolve();
+              else
+                reject(
+                  new Error(
+                    `sandbox file inject failed (${dest}): ${status.message ?? JSON.stringify(status)}`,
+                  ),
+                );
+            },
+          )
+          .then(() => {
+            stdin.write(content);
+            stdin.end();
+          })
+          .catch((wsErr: unknown) => {
+            reject(wrapExecErr("exec WebSocket error", wsErr));
           });
+      } catch (syncErr: unknown) {
+        // execApi.exec() threw synchronously (e.g. invalid kubeconfig).
+        // The Promise constructor would catch this and reject with the raw
+        // value — bypassing the .catch above — so we intercept it here.
+        reject(wrapExecErr("exec connection error", syncErr));
+      }
     });
 
     const timeoutPromise = new Promise<void>((_, reject) =>
