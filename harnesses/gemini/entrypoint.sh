@@ -96,9 +96,13 @@ if [ -n "${GEMINI_SELFTEST_PROMPT:-}" ]; then
   echo "  GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-<unset>}"
   echo "  GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-<unset>}"
   echo "  GEMINI_CLI_TRUST_WORKSPACE=${GEMINI_CLI_TRUST_WORKSPACE:-<unset>}"
-  echo "[selftest] running: gemini -p \"$_prompt\""
+  # Pin the model name. The CLI's auto-selected default
+  # ("gemini-3-flash-preview") isn't accessible from every GCP project
+  # and the publisher-model 404 has no useful retry — pin a model that's
+  # broadly available on Vertex.
+  echo "[selftest] running: gemini -m gemini-2.5-flash -p \"$_prompt\""
   echo "[selftest-begin]"
-  gemini -p "$_prompt" 2>&1 || echo "[selftest] gemini exited non-zero"
+  gemini -m gemini-2.5-flash -p "$_prompt" 2>&1 || echo "[selftest] gemini exited non-zero"
   echo "[selftest-end]"
 fi
 
