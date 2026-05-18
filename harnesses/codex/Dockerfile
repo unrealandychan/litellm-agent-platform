@@ -14,6 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex@latest
 
+# gh CLI: pinned release + checksum (matches the opencode / claude-agent-sdk
+# harness posture). Required so agents can run `gh pr create`, `gh issue view`,
+# etc. without bootstrapping the binary at runtime.
+ARG GH_VERSION=2.92.0
+ARG GH_SHA256=8f8212b1a9cec261a8839e0893168f50d3fc70f095da257feef4229234cefdf8
+RUN curl -fsSL -o /tmp/gh.deb \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.deb" \
+    && echo "${GH_SHA256}  /tmp/gh.deb" | sha256sum -c - \
+    && dpkg -i /tmp/gh.deb \
+    && rm /tmp/gh.deb
+
 # Vault CA: the vault sidecar MITM-proxies all egress HTTPS to swap
 # credential stubs for real values. Bake the CA into the OS trust store so
 # git, curl, and Node (via NODE_EXTRA_CA_CERTS) all trust the proxy TLS.
