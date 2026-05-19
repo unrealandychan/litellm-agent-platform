@@ -29,6 +29,7 @@ import { fetch } from "undici";
 import {
   mintAgentAccessToken,
   mintAgentRefreshToken,
+  type AgentScope,
 } from "@/server/auth/agent-token";
 import { env } from "@/server/env";
 import { decrypt } from "@/server/integrations/core/crypto";
@@ -485,16 +486,24 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
   // harness is actually expected to call back — without LAP_BASE_URL the
   // memory tools no-op and the harness never makes the call.
   if (env.LAP_BASE_URL) {
+    // Scopes minted into BOTH tokens. The refresh token carries the same
+    // scope set so /agent-auth/refresh can re-derive the grant without a
+    // hardcoded default. Widening this list is the only place to edit when
+    // new agent scopes are added.
+    const agentScopes: AgentScope[] = ["memory"];
     out.push({
       name: "REAL_LAP_ACCESS_TOKEN",
       value: mintAgentAccessToken({
         agent_id: agent.agent_id,
-        scope: ["memory"],
+        scope: agentScopes,
       }),
     });
     out.push({
       name: "REAL_LAP_REFRESH_TOKEN",
-      value: mintAgentRefreshToken({ agent_id: agent.agent_id }),
+      value: mintAgentRefreshToken({
+        agent_id: agent.agent_id,
+        scope: agentScopes,
+      }),
     });
   }
 

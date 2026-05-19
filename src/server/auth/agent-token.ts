@@ -70,6 +70,15 @@ interface AccessClaims extends BaseClaims {
 
 interface RefreshClaims extends BaseClaims {
   kind: "refresh";
+  /**
+   * The scope set this refresh token is allowed to mint future access tokens
+   * for — must mirror the original mint-time grant. Carried in the refresh
+   * token's claims so /agent-auth/refresh re-derives privileges from the
+   * token itself rather than a hardcoded default. Without this, widening
+   * the access-token scope set in k8s.ts (or anywhere else) would silently
+   * downgrade every pod's first post-rotation token.
+   */
+  scope: AgentScope[];
 }
 
 export type AgentTokenClaims = AccessClaims | RefreshClaims;
@@ -101,6 +110,12 @@ export function mintAgentAccessToken(input: MintAccessInput): string {
 
 interface MintRefreshInput {
   agent_id: string;
+  /**
+   * The scope set the resulting refresh token is allowed to mint access
+   * tokens for. Must equal the scope grant on the access token minted
+   * alongside it at pod-spawn time — they are issued as a pair.
+   */
+  scope: AgentScope[];
   pod?: string;
   ttl_sec?: number;
 }
@@ -110,6 +125,7 @@ export function mintAgentRefreshToken(input: MintRefreshInput): string {
   const claims: RefreshClaims = {
     kind: "refresh",
     agent_id: input.agent_id,
+    scope: input.scope,
     iat: now,
     exp: now + (input.ttl_sec ?? REFRESH_TOKEN_TTL_SEC),
     ...(input.pod ? { pod: input.pod } : {}),
@@ -192,19 +208,65 @@ function verifyAndDecode(
   const expected = hmac(payload);
   if (!safeEqual(sig, expected)) return { ok: false, reason: "bad_signature" };
 
-  let claims: AgentTokenClaims;
+  let raw: unknown;
   try {
     const decoded = Buffer.from(b64urlDecodeToBuffer(payload)).toString("utf8");
-    claims = JSON.parse(decoded) as AgentTokenClaims;
+    raw = JSON.parse(decoded);
   } catch {
     // Signature passed but the body isn't decodable JSON — should be
     // impossible with our own minter, but treat as malformed defensively.
     return { ok: false, reason: "malformed" };
   }
+  // Defense-in-depth: the HMAC gate already restricts callers to
+  // signing-key holders, but a malformed (or maliciously-crafted) payload
+  // from a key-holder would otherwise slip through TypeScript's compile-time
+  // `as AgentTokenClaims` and reach the comparison logic below — where
+  // `undefined <= number` is silently `false` (so a missing `exp` would never
+  // expire) and `claims.scope.includes(...)` would throw a 500 instead of
+  // returning a clean 401. Validate every field we depend on before use.
+  const claims = parseClaims(raw);
+  if (!claims) return { ok: false, reason: "malformed" };
   if (claims.exp <= Math.floor(Date.now() / 1000)) {
     return { ok: false, reason: "expired" };
   }
   return { ok: true, claims };
+}
+
+function parseClaims(raw: unknown): AgentTokenClaims | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.agent_id !== "string" || r.agent_id.length === 0) return null;
+  if (typeof r.iat !== "number" || !Number.isFinite(r.iat)) return null;
+  if (typeof r.exp !== "number" || !Number.isFinite(r.exp)) return null;
+  if (r.pod !== undefined && typeof r.pod !== "string") return null;
+  if (
+    !Array.isArray(r.scope) ||
+    !r.scope.every((s) => typeof s === "string")
+  ) {
+    return null;
+  }
+  const scope = r.scope as AgentScope[];
+  if (r.kind === "access") {
+    return {
+      kind: "access",
+      agent_id: r.agent_id,
+      iat: r.iat,
+      exp: r.exp,
+      scope,
+      ...(r.pod !== undefined ? { pod: r.pod as string } : {}),
+    };
+  }
+  if (r.kind === "refresh") {
+    return {
+      kind: "refresh",
+      agent_id: r.agent_id,
+      iat: r.iat,
+      exp: r.exp,
+      scope,
+      ...(r.pod !== undefined ? { pod: r.pod as string } : {}),
+    };
+  }
+  return null;
 }
 
 function hmac(payload: string): string {

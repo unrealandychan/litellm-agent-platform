@@ -29,7 +29,6 @@ import { z, ZodError } from "zod";
 import {
   mintAgentAccessToken,
   verifyAgentRefreshToken,
-  type AgentScope,
 } from "@/server/auth/agent-token";
 import { wrap } from "@/server/route-helpers";
 
@@ -39,11 +38,6 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   refresh_token: z.string().min(1, "refresh_token required"),
 });
-
-// Mirror the scope set the pod-spawn flow grants. Today: just "memory".
-// When we widen this (skills, integrations, etc.), update both this and
-// the corresponding mintAgentAccessToken call in src/server/k8s.ts.
-const DEFAULT_GRANTED_SCOPES: AgentScope[] = ["memory"];
 
 export const POST = wrap(async (req) => {
   let body: z.infer<typeof Body>;
@@ -64,9 +58,14 @@ export const POST = wrap(async (req) => {
     return Response.json({ error: "invalid refresh token" }, { status: 401 });
   }
 
+  // Re-derive the grant from the refresh token's own claims so widening
+  // the scope set at pod-spawn time (k8s.ts) is the ONLY place to edit.
+  // Anything else risks a silent privilege downgrade on first rotation:
+  // a refresh token minted with scope=[A,B] would yield access tokens
+  // with only the hardcoded list, causing opaque 403s 15 min later.
   const access_token = mintAgentAccessToken({
     agent_id: verified.claims.agent_id,
-    scope: DEFAULT_GRANTED_SCOPES,
+    scope: verified.claims.scope,
     pod: verified.claims.pod,
   });
 
