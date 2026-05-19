@@ -12,7 +12,7 @@
  * launch.
  */
 
-import { assertAuth } from "@/server/auth";
+import { assertAgentTokenOrMaster } from "@/server/auth";
 import { prisma } from "@/server/db";
 import {
   UpdateMemoryBody,
@@ -30,8 +30,8 @@ interface RouteContext {
 }
 
 export const PATCH = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
   const { agent_id, memory_id } = await ctx.params;
+  assertAgentTokenOrMaster(req, { scope: "memory", agent_id });
 
   const existing = await prisma.memory.findUnique({ where: { memory_id } });
   if (existing === null) httpError(404, `memory '${memory_id}' not found`);
@@ -46,8 +46,8 @@ export const PATCH = wrap<RouteContext>(async (req, ctx) => {
 });
 
 export const DELETE = wrap<RouteContext>(async (req, ctx) => {
-  assertAuth(req);
   const { agent_id, memory_id } = await ctx.params;
+  assertAgentTokenOrMaster(req, { scope: "memory", agent_id });
 
   const existing = await prisma.memory.findUnique({ where: { memory_id } });
   if (existing === null) httpError(404, `memory '${memory_id}' not found`);

@@ -528,6 +528,9 @@ export interface ServerEnv {
   DATABASE_URL: string;
   UI_USERNAME: string;
   MASTER_KEY: string;
+  // HMAC signing key for per-pod agent tokens. Defaults to MASTER_KEY at
+  // env-load time when unset; see src/server/auth/agent-token.ts.
+  HARNESS_TOKEN_SIGNING_KEY: string;
   K8S_NAMESPACE: string; // default "default"
   // Hostname the web container reaches the kind/k8s node on. For local dev
   // with kind + docker-compose this is "host.docker.internal" (mapped via

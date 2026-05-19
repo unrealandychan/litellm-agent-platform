@@ -26,6 +26,11 @@ import { createHmac } from "node:crypto";
 import * as k8s from "@kubernetes/client-node";
 import { fetch } from "undici";
 
+import {
+  mintAgentAccessToken,
+  mintAgentRefreshToken,
+  type AgentScope,
+} from "@/server/auth/agent-token";
 import { env } from "@/server/env";
 import { decrypt } from "@/server/integrations/core/crypto";
 import { renderMemoryBlock, topMemoriesForAgent } from "@/server/memory";
@@ -370,9 +375,15 @@ async function buildContainerEnv(
     PORT: String(agent.container_port),
     // For the harness's memory tools — empty LAP_BASE_URL makes the
     // tools no-op gracefully (the harness checks before registering them).
+    //
+    // The auth tokens (LAP_ACCESS_TOKEN + LAP_REFRESH_TOKEN) are deliberately
+    // routed through buildVaultEnv below as REAL_*. The harness sees stubs
+    // in its env (via /lap-shared/env sourced at entrypoint), and the vault
+    // sidecar swaps them for the real values on outbound TLS. Don't add
+    // them here, even conditionally — if MASTER_KEY ever sneaks into a pod
+    // env, an agent with shell access can read it and call any LAP route.
     AGENT_ID: agent.agent_id,
     LAP_BASE_URL: env.LAP_BASE_URL,
-    LAP_AUTH_TOKEN: env.LAP_BASE_URL ? env.MASTER_KEY : "",
     // Harness phase-report channel (see entrypoint.sh `report_phase`).
     PLATFORM_URL: platformUrl,
     SESSION_ID: phaseToken,
@@ -424,6 +435,15 @@ async function buildContainerEnv(
   // CONTAINER_ENV_LITELLM_API_KEY, silently defeating the vault-stub guarantee.
   // The real key is routed through buildVaultEnv as REAL_LITELLM_API_KEY.
   delete merged["LITELLM_API_KEY"];
+  // Same defense for the per-pod agent tokens: they're routed through vault
+  // as REAL_LAP_ACCESS_TOKEN / REAL_LAP_REFRESH_TOKEN. If a stale
+  // CONTAINER_ENV_LAP_ACCESS_TOKEN (or LAP_AUTH_TOKEN, from before this
+  // change) is set on the platform process, the passthrough spread would
+  // otherwise reintroduce a real bearer into the harness env where the
+  // agent can read it.
+  delete merged["LAP_ACCESS_TOKEN"];
+  delete merged["LAP_REFRESH_TOKEN"];
+  delete merged["LAP_AUTH_TOKEN"];
   return Object.entries(merged).map(([name, value]) => ({ name, value }));
 }
 
@@ -456,6 +476,36 @@ function buildVaultEnv(opts: RunTaskOpts): Array<{ name: string; value: string }
   // appears in the process environment. Outbound API calls carry the stub in
   // Authorization headers; vault swaps it for the real key at the wire.
   out.push({ name: "REAL_LITELLM_API_KEY", value: env.LITELLM_API_KEY });
+
+  // Per-pod scoped tokens for the harness's calls back into LAP. The access
+  // token is short-lived (15min); the refresh token lives ~24h. Both are
+  // HMAC-signed and verified statelessly by the platform. See
+  // src/server/auth/agent-token.ts for the format, and the /agent-auth/refresh
+  // route for the renewal flow. The harness reads them as LAP_ACCESS_TOKEN /
+  // LAP_REFRESH_TOKEN (stubs) from /lap-shared/env. Only minted when the
+  // harness is actually expected to call back — without LAP_BASE_URL the
+  // memory tools no-op and the harness never makes the call.
+  if (env.LAP_BASE_URL) {
+    // Scopes minted into BOTH tokens. The refresh token carries the same
+    // scope set so /agent-auth/refresh can re-derive the grant without a
+    // hardcoded default. Widening this list is the only place to edit when
+    // new agent scopes are added.
+    const agentScopes: AgentScope[] = ["memory"];
+    out.push({
+      name: "REAL_LAP_ACCESS_TOKEN",
+      value: mintAgentAccessToken({
+        agent_id: agent.agent_id,
+        scope: agentScopes,
+      }),
+    });
+    out.push({
+      name: "REAL_LAP_REFRESH_TOKEN",
+      value: mintAgentRefreshToken({
+        agent_id: agent.agent_id,
+        scope: agentScopes,
+      }),
+    });
+  }
 
   // Egress enforcement — vault checks these before proxying each CONNECT.
   const allowOut = Array.isArray(agent.allow_out) ? (agent.allow_out as string[]) : [];
